@@ -26,6 +26,7 @@ htmlcov/
 # Local SDK, compiler, and editor output
 .ufbt/
 .ufbt-build/
+.ufbt-*/
 dist/
 build/
 *.o

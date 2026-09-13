@@ -17,6 +17,10 @@ def profile_path():
     return Path(base) / 'PiShockFlipperBridge' / 'device.dpapi'
 
 
+def preferences_path():
+    return profile_path().with_name('appearance.json')
+
+
 class InstanceLock:
     """Prevent a second desktop controller in the current Windows session."""
     def __init__(self):

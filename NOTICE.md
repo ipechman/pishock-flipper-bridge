@@ -14,7 +14,7 @@ The finite transmission iterator, parser, USB application, desktop interface, an
 
 ## Flipper application and installation
 
-The bundled FAP targets Flipper Devices' **official SDK 1.4.3, API 87.1, hardware f7**, with toolchain 39. Its 54 imported symbols are enabled exports in that official SDK. Installing the FAP installs an add-on application, not firmware.
+The official FAP targets Flipper Devices' **official SDK 1.4.3, API 87.1, hardware f7**, with toolchain 39. Its 54 imported symbols are enabled exports in that official SDK. A second build of the same application source targets **API 88.9, hardware f7**, using the [DarkFlippers SDK snapshot](https://github.com/DarkFlippers/unleashed-firmware/releases/tag/unlshd-093). The installer selects the matching application for the device API. Custom firmware is not required; installing either FAP installs only an add-on application.
 
 The desktop installer uses Flipper Devices' existing `device_info`, `loader info`, and USB storage commands. Protocol behavior was checked against the official [storage helper](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/scripts/flipper/storage.py), [storage CLI](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/storage/storage_cli.c), [storage implementation](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/storage/storage_external_api.c), and [loader CLI](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/loader/loader_cli.c).
 

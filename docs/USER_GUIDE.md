@@ -6,9 +6,11 @@ You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with
 
 # Install the desktop application
 
-Download PiShockBridge-Setup-0.2.0.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional.
+Download PiShockBridge-Setup-0.2.1.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
 
 You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
+
+Dark mode is the default. To change it, choose Dark or Light under Appearance in the sidebar. Your choice is saved separately from the device profile and restored when you next open the app.
 
 Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
 
@@ -34,7 +36,7 @@ Skip this section if a compatible PiShock USB Radio app is already installed and
 4. Under Install the Flipper app, choose Find Flipper and select the detected device.
 5. Choose Install app and keep the cable connected until installation finishes.
 
-The bundled add-on supports official firmware 1.4.3, API 87.1, hardware f7. Installation checks the Flipper's API and refuses a mismatch before writing application files. For another API, obtain an application build made for that firmware; the contributor build guide explains how.
+The desktop app includes add-on builds for API 87.1 (official firmware 1.4.3) and API 88.9, both for hardware f7. Installation checks your Flipper's API and automatically selects its matching build. You do not need to change firmware. An unsupported API is rejected before writing application files; the contributor build guide explains how to build for other versions.
 
 The installer copies only the add-on and its temporary verification files. It reads the copied application back, verifies it, and keeps a verified backup while replacing an existing copy. Keep power and USB connected through the final copy: Flipper's storage replacement is not guaranteed to be atomic during a power loss.
 
@@ -122,7 +124,9 @@ Use a data cable, close qFlipper and other bridge windows, reconnect USB, and tr
 
 ## Installation reports an API mismatch
 
-The included build is for official firmware 1.4.3, API 87.1. The installer does not change firmware to resolve a mismatch. Keep an existing working add-on, or use a compatible application build for your Flipper's current firmware.
+Version 0.2.0 bundled only API 87.1. If the message says your Flipper uses API 88.9, update the desktop application to 0.2.1 or later and retry Install app; this version includes the matching add-on. Keep your Flipper's firmware as it is.
+
+For APIs other than 87.1 or 88.9, keep an existing working add-on, or use an application build for your Flipper's current firmware. The installer does not change firmware or bypass compatibility checks.
 
 ## The hub or paired shocker is missing
 
@@ -157,6 +161,8 @@ Use the Windows account that saved it. A profile is encrypted for that account a
 # Privacy and updates
 
 Your desktop profile is stored at %LOCALAPPDATA%\PiShockFlipperBridge\device.dpapi. You can paste %LOCALAPPDATA%\PiShockFlipperBridge into File Explorer's address bar to find that folder.
+
+The appearance preference is stored separately in that folder and contains only your theme choice.
 
 The saved identity is encrypted for your Windows account. Wi-Fi passwords and pairing keys are discarded during import. Share the source or installer, not device.dpapi, decrypted profiles, raw hub responses, or screenshots showing your personal device details.
 

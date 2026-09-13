@@ -7,7 +7,7 @@ to build the desktop application, run tests, or rebuild the Flipper add-on.
 
 ## Source layout
 
-- `host/desktop_app.py`: desktop window and guided setup.
+- `host/desktop_app.py`, `desktop_theme.py`: desktop window, guided setup, and appearance.
 - `host/desktop_service.py`, `desktop_paths.py`, and `flipper_install.py`: desktop
   coordination, private settings, and installation of the Flipper add-on.
 - Other `host/` modules: PiShock bridge, USB connection, and unit tests.
@@ -41,8 +41,8 @@ Omit that argument to build just the portable application and ZIP.
 
 The release files appear in `dist/`:
 
-- `PiShockBridge-Setup-0.2.0.exe`: the end-user installer.
-- `PiShockBridge-0.2.0-windows-x64.zip`: portable application; extract the entire
+- `PiShockBridge-Setup-0.2.1.exe`: the end-user installer.
+- `PiShockBridge-0.2.1-windows-x64.zip`: portable application; extract the entire
   folder and open `PiShockBridge.exe`.
 - `SHA256SUMS.txt`: checksums for the downloadable packages.
 - `BUILD_INFO.json`: tool versions and build validation results.
@@ -56,7 +56,7 @@ not contain a certificate, signing secret, or automatic publication step.
 ### What the release build checks
 
 The packager copies an explicit list of public runtime modules and resources to
-a fresh staging directory. It includes the official firmware add-on, guide,
+a fresh staging directory. It includes both supported API builds of the add-on, guide,
 README, license, and notices. It excludes profiles, settings, logs, captures,
 tests, Git history, local tools, and compiler debug artifacts.
 
@@ -77,7 +77,7 @@ first Tk window; this is needed by some Python distributions when frozen.
 For an additional local privacy check, run:
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.2.0-windows-x64
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.2.1-windows-x64
 ```
 
 The optional `--forbid-text` argument checks additional private values without
@@ -114,8 +114,19 @@ Passing these tests does not verify RF range or an untested shocker model.
 
 The add-on is a normal external `.fap` application. Custom firmware is not
 required. Building or installing this add-on does not replace Flipper firmware.
-The supplied `pishock_usb_radio-official-1.4.3.fap` targets official firmware
-1.4.3, hardware `f7`, API `87.1`. Other firmware APIs may require a matching build.
+Two builds of the same source are included:
+
+| Application file | SDK target |
+| --- | --- |
+| `pishock_usb_radio-official-1.4.3.fap` | Official firmware 1.4.3, API 87.1, hardware f7 |
+| `pishock_usb_radio-api-88.9.fap` | API 88.9, hardware f7; [DarkFlippers SDK snapshot](https://github.com/DarkFlippers/unleashed-firmware/releases/tag/unlshd-093) |
+
+The installer selects by the exact device API and hardware target, checks the
+selected FAP's embedded metadata, and verifies copied bytes. Adding another build
+requires validating that SDK and registering its asset in `host/flipper_install.py`
+and `packaging/build_windows.py`. Do not relabel a FAP or remove the check to claim
+compatibility with a different API. Existing working add-ons remain usable through
+the desktop connection without going through installation.
 
 Install [uFBT](https://github.com/flipperdevices/flipperzero-ufbt), then build with
 the official SDK from the repository root:
@@ -134,6 +145,21 @@ is `app/dist/pishock_usb_radio.fap`, relative to the repository root. Copy the
 release `.fap` to `pishock_usb_radio-official-1.4.3.fap` only after checking that it
 matches the documented target. Keep `app/dist/debug/` and other debug artifacts
 local. Rebuild the desktop release to include a changed add-on.
+
+To rebuild the API 88.9 variant, use a separate uFBT state directory with the
+linked SDK snapshot and build the same `app/` sources:
+
+```powershell
+$env:UFBT_HOME = Join-Path $PWD '.ufbt-api-88.9'
+Set-Location app
+ufbt update --hw-target=f7 --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-093/flipper-z-f7-sdk-unlshd-093.zip
+ufbt
+```
+
+Start this example from the repository root using the uFBT environment configured
+above. Verify API 88.9 and target f7 in the result, keep only the release FAP as
+`pishock_usb_radio-api-88.9.fap`, and update `SHA256SUMS` when changing either build.
+This downloads build tools only; it does not install any firmware on a Flipper.
 
 ## GitHub Actions
 

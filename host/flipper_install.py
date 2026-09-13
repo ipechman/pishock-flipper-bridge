@@ -24,6 +24,10 @@ from start_bridge import FLIPPER_USB, checked_port_name, is_radio_interface
 APP_PATH = "/ext/apps/Sub-GHz/pishock_usb_radio.fap"
 ASSET_NAME = "pishock_usb_radio-official-1.4.3.fap"
 SUPPORTED_API = (87, 1)
+ASSETS = {
+    SUPPORTED_API: ASSET_NAME,
+    (88, 9): "pishock_usb_radio-api-88.9.fap",
+}
 CHUNK_SIZE = 1024
 MAX_FILE_SIZE = 2 * 1024 * 1024
 IO_TIMEOUT = 8.0
@@ -52,7 +56,7 @@ class DeviceInfo:
 
     @property
     def supported(self) -> bool:
-        return self.target == 7 and (self.api_major, self.api_minor) == SUPPORTED_API
+        return self.target == 7 and (self.api_major, self.api_minor) in ASSETS
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,10 @@ def parse_device_info(response: bytes) -> DeviceInfo:
         if fields.get("hardware_model") not in ("Flipper Zero", "FlipperZero"):
             raise ValueError
         major, minor = int(fields["firmware_api_major"]), int(fields["firmware_api_minor"])
-        target = int(fields.get("firmware_target", fields.get("hardware_target", "")))
+        targets = {int(fields[key]) for key in ("hardware_target", "firmware_target") if key in fields}
+        if len(targets) != 1:
+            raise ValueError
+        target = targets.pop()
         if not (0 <= major <= 65535 and 0 <= minor <= 65535 and 0 <= target <= 65535):
             raise ValueError
     except (ValueError, KeyError):
@@ -121,9 +128,9 @@ def parse_device_info(response: bytes) -> DeviceInfo:
     return DeviceInfo(version, major, minor, target)
 
 
-def _asset_bytes(asset_dir: str | Path) -> bytes:
+def _asset_bytes(asset_dir: str | Path, api: tuple[int, int] = SUPPORTED_API) -> bytes:
     try:
-        data = (Path(asset_dir) / ASSET_NAME).read_bytes()
+        data = (Path(asset_dir) / ASSETS[api]).read_bytes()
         if not 52 <= len(data) <= MAX_FILE_SIZE or data[:7] != b"\x7fELF\x01\x01\x01":
             raise ValueError
         if struct.unpack_from("<H", data, 18)[0] != 40:  # ARM
@@ -151,11 +158,11 @@ def _asset_bytes(asset_dir: str | Path) -> bytes:
                 if size < 14 or start + size > len(data):
                     raise ValueError
                 manifests.append(struct.unpack_from("<IIIh", data, start))
-        expected_api = (SUPPORTED_API[0] << 16) | SUPPORTED_API[1]
+        expected_api = (api[0] << 16) | api[1]
         if manifests != [(0x52474448, 1, expected_api, 7)]:
             raise ValueError
         return data
-    except (OSError, ValueError, struct.error):
+    except (KeyError, OSError, ValueError, struct.error):
         raise InstallError("The bundled Flipper application is missing or incompatible. Reinstall the desktop application.") from None
 
 
@@ -339,8 +346,6 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
     """
     report = progress or (lambda percent, message: None)
     _check_cancel(cancel)
-    data = _asset_bytes(asset_dir)
-    digest = hashlib.sha256(data).hexdigest()
     console = _Console(port, serial_factory)
     token = uuid.uuid4().hex
     staging = f"{APP_PATH}.{token}.upload"
@@ -351,10 +356,14 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
         report(0, "Checking Flipper firmware…")
         device = console.identify()
         if not device.supported:
+            supported = " and ".join(f"{major}.{minor}" for major, minor in ASSETS)
             raise InstallError(
-                f"This Flipper uses API {device.api_major}.{device.api_minor}. "
-                "The bundled app requires official firmware 1.4.3, API 87.1, hardware f7. "
-                "Use an application build matching your firmware; no firmware was changed.")
+                f"This Flipper uses API {device.api_major}.{device.api_minor} on hardware f{device.target}. "
+                f"Bundled application builds support API {supported} on hardware f7. "
+                "Keep your existing working app, or use a build matching your firmware. "
+                "No firmware was changed.")
+        data = _asset_bytes(asset_dir, (device.api_major, device.api_minor))
+        digest = hashlib.sha256(data).hexdigest()
         _check_cancel(cancel)
         console.require_idle()
         for folder in ("/ext/apps", "/ext/apps/Sub-GHz"):

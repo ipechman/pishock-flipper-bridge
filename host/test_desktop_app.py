@@ -4,6 +4,8 @@ Windows CI runs these normally. Hosts without Tk or a display skip this class;
 the controller, installer and protocol tests remain independent of the GUI.
 """
 from contextlib import ExitStack
+from pathlib import Path
+import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -19,6 +21,7 @@ if tk is not None:
     # Missing application dependencies must fail CI instead of silently
     # masquerading as an unavailable display.
     import desktop_app as desktop
+    import desktop_theme as appearance
 else:
     desktop = None
 
@@ -48,7 +51,7 @@ class DesktopAppTests(unittest.TestCase):
                                    "import_saved_profile", "BridgeSession")),
                 (desktop.installer, ("discover_console_ports", "install_app")),
                 (desktop.webbrowser, ("open",)),
-                (desktop, ("profile_path",))):
+                (desktop, ("profile_path", "preferences_path", "load_preference", "save_preference"))):
             for name in names:
                 mocked = self.stack.enter_context(patch.object(
                     owner, name, side_effect=AssertionError("Real I/O is forbidden in desktop tests.")))
@@ -337,6 +340,97 @@ class DesktopAppTests(unittest.TestCase):
         self.assertNotIn("DO_NOT_DISPLAY", self.app.task_text.get())
         self.assertIn("could not finish", self.app.task_text.get())
         self.assertFalse(self.app.busy)
+
+    def test_dark_is_default_and_theme_switch_preserves_connected_state(self):
+        self.assertEqual(self.app.appearance.name, 'dark')
+        self.assertEqual(self.app.cget('background'), appearance.PALETTES['dark']['bg'])
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        controller = self.app.session
+        snapshot = (self.app.profile, self.app.radio_combo.get(), self.app.current_page,
+                    self.app.beep_only.get(), self.app.status_text.get(), self.app.detail_text.get())
+        for name in ('Light', 'Dark'):
+            self.app.theme_choice.set(name)
+            self.app._appearance_changed()
+            self.app.update_idletasks()
+            self.assertEqual(self.app.appearance.name, name.lower())
+            self.assertEqual(self.app.cget('background'), appearance.PALETTES[name.lower()]['bg'])
+            self.assertIs(self.app.session, controller)
+            self.assertTrue(controller.running)
+            self.assertTrue(self.app.mode_toggle.instate(['disabled']))
+            self.assertTrue(self.app.stop_button.instate(['!disabled']))
+            self.assertEqual(snapshot, (self.app.profile, self.app.radio_combo.get(), self.app.current_page,
+                                       self.app.beep_only.get(), self.app.status_text.get(), self.app.detail_text.get()))
+
+    def test_open_dropdown_and_guide_follow_theme_switch(self):
+        popup = self.app.tk.call('ttk::combobox::PopdownWindow', str(self.app.radio_combo))
+        listbox = str(popup) + '.f.l'
+        self.assertEqual(self.app.tk.call(listbox, 'cget', '-background'),
+                         appearance.PALETTES['dark']['field'])
+        self.app.open_guide()
+        guide = next(widget for widget in self.app.winfo_children() if isinstance(widget, tk.Toplevel))
+        guide.withdraw()
+        text = next(widget for widget in guide.winfo_children() if isinstance(widget, tk.Text))
+        for name in ('Light', 'Dark'):
+            self.app.theme_choice.set(name)
+            self.app._appearance_changed()
+            self.assertEqual(self.app.tk.call(listbox, 'cget', '-background'),
+                             appearance.PALETTES[name.lower()]['field'])
+            self.assertEqual(text.cget('background'), appearance.PALETTES[name.lower()]['card'])
+            self.assertEqual(str(text.cget('state')), 'disabled')
+
+    def test_preference_save_failure_keeps_theme_and_connection_warning(self):
+        self.app.demo = False
+        self.app.appearance_path = Path('synthetic-appearance.json')
+        self.app._event(event('warning', 'Press Back on the Flipper.'))
+        detail, task = self.app.detail_text.get(), self.app.task_text.get()
+        with patch.object(desktop, 'save_preference', side_effect=OSError('private path')) as save:
+            self.app.theme_choice.set('Light')
+            self.app._appearance_changed()
+        save.assert_called_once_with(self.app.appearance_path, 'light')
+        self.assertEqual(self.app.appearance.name, 'light')
+        self.assertEqual(self.app.theme_note.get(), 'For this session only')
+        self.assertEqual((self.app.detail_text.get(), self.app.task_text.get()), (detail, task))
+
+
+@unittest.skipIf(desktop is None, 'Tk is unavailable on this host')
+class AppearancePreferenceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / 'settings' / 'appearance.json'
+
+    def test_missing_invalid_and_unreadable_preferences_default_to_dark(self):
+        self.assertEqual(appearance.load_preference(self.path), 'dark')
+        self.path.parent.mkdir()
+        for content in ('broken', '[]', '[' * 4000, '{"theme":false}', '{"theme":[]}',
+                        '{"theme":"unknown"}', '{"theme":"light"}' + ' ' * 4096):
+            self.path.write_text(content, encoding='utf-8')
+            self.assertEqual(appearance.load_preference(self.path), 'dark')
+        with patch.object(Path, 'open', side_effect=PermissionError('unreadable')):
+            self.assertEqual(appearance.load_preference(self.path), 'dark')
+
+    def test_save_and_reload_is_separate_from_encrypted_profile(self):
+        self.path.parent.mkdir()
+        profile = self.path.with_name('device.dpapi')
+        profile.write_bytes(b'synthetic encrypted profile sentinel')
+        for theme in ('light', 'dark'):
+            appearance.save_preference(self.path, theme)
+            self.assertEqual(appearance.load_preference(self.path), theme)
+            self.assertEqual(profile.read_bytes(), b'synthetic encrypted profile sentinel')
+            self.assertEqual(set(appearance.json.loads(self.path.read_text())), {'theme'})
+        self.assertEqual(sorted(path.name for path in self.path.parent.iterdir()),
+                         ['appearance.json', 'device.dpapi'])
+
+    def test_interrupted_save_preserves_previous_preference_and_cleans_temporary_file(self):
+        appearance.save_preference(self.path, 'light')
+        with patch.object(appearance.os, 'replace', side_effect=OSError('simulated failure')):
+            with self.assertRaises(OSError):
+                appearance.save_preference(self.path, 'dark')
+        self.assertEqual(appearance.load_preference(self.path), 'light')
+        self.assertEqual([path.name for path in self.path.parent.iterdir()], ['appearance.json'])
 
 
 if __name__ == "__main__":

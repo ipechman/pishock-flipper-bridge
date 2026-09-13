@@ -1,6 +1,7 @@
 """Installer protocol tests: no serial devices are opened."""
 
 from pathlib import Path
+import hashlib
 import shlex
 import struct
 import tempfile
@@ -12,7 +13,7 @@ from unittest.mock import patch
 import flipper_install as install
 
 
-def make_fap(api=(87, 1)):
+def make_fap(api=(87, 1), target=7):
     header = bytearray(52)
     header[:7] = b"\x7fELF\x01\x01\x01"
     struct.pack_into("<H", header, 18, 40)
@@ -24,7 +25,7 @@ def make_fap(api=(87, 1)):
     struct.pack_into("<II", sections, 56, 172, len(names))
     struct.pack_into("<I", sections, 80, 11)
     struct.pack_into("<II", sections, 96, 172 + len(names), 14)
-    manifest = struct.pack("<IIIh", 0x52474448, 1, (api[0] << 16) | api[1], 7)
+    manifest = struct.pack("<IIIh", 0x52474448, 1, (api[0] << 16) | api[1], target)
     # Include every byte value, CLI prompts/commands, and line delimiters in
     # payload; delimiter-based binary reading or accidental echo corrupts it.
     payload = (bytes(range(256)) + b">: \r\nReady?\r\n\x03storage remove /ext\r") * 9
@@ -32,8 +33,9 @@ def make_fap(api=(87, 1)):
 
 
 class FakeFlipper:
-    def __init__(self, *, api=(87, 1), files=None, partial_write=23, partial_read=17):
+    def __init__(self, *, api=(87, 1), target=7, files=None, partial_write=23, partial_read=17):
         self.api = api
+        self.target = target
         self.files = dict(files or {})
         self.input = bytearray()
         self.output = bytearray(b"Welcome\r\n>: ")
@@ -110,7 +112,7 @@ class FakeFlipper:
         self.commands.append(command)
         if command == "device_info":
             self.output.extend((f"hardware_model: Flipper Zero\r\nhardware_uid: PRIVATE-ID\r\n"
-                                f"hardware_target: 7\r\nfirmware_version: 1.4.3\r\n"
+                                f"hardware_target: {self.target}\r\nfirmware_version: 1.4.3\r\n"
                                 f"firmware_api_major: {self.api[0]}\r\n"
                                 f"firmware_api_minor: {self.api[1]}\r\n").encode())
         elif command == "loader info":
@@ -163,7 +165,8 @@ class InstallerTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.asset_dir = Path(self.directory.name)
         self.payload = make_fap()
-        (self.asset_dir / install.ASSET_NAME).write_bytes(self.payload)
+        for api, name in install.ASSETS.items():
+            (self.asset_dir / name).write_bytes(make_fap(api))
 
     def run_install(self, fake, **kwargs):
         return install.install_app("COM5", self.asset_dir, serial_factory=fake.factory, **kwargs)
@@ -183,17 +186,53 @@ class InstallerTests(unittest.TestCase):
     def test_read_only_inspection_does_not_touch_storage(self):
         fake = FakeFlipper(api=(88, 9))
         info = install.inspect_device("COM5", serial_factory=fake.factory)
-        self.assertFalse(info.supported)
+        self.assertTrue(info.supported)
         self.assertEqual(fake.commands, ["device_info"])
         self.assertTrue(fake.closed)
 
     def test_wrong_api_prevents_all_storage_writes(self):
-        for api in ((88, 9), (87, 0), (86, 1)):
+        for api in ((88, 8), (88, 10), (87, 0), (87, 2), (86, 1), (89, 1)):
             with self.subTest(api=api):
                 fake = FakeFlipper(api=api)
                 with self.assertRaisesRegex(install.InstallError, "matching your firmware"):
                     self.run_install(fake)
                 self.assertEqual(fake.commands, ["device_info"])
+
+    def test_matching_api_build_selected_without_changing_firmware(self):
+        for api in ((87, 1), (88, 9)):
+            with self.subTest(api=api):
+                fake = FakeFlipper(api=api, files={install.APP_PATH: b"previous app"})
+                result = self.run_install(fake)
+                expected = make_fap(api)
+                self.assertEqual(fake.files, {install.APP_PATH: expected})
+                self.assertEqual(result.sha256, hashlib.sha256(expected).hexdigest())
+                self.assertEqual((result.device.api_major, result.device.api_minor), api)
+                self.assertTrue(fake.closed)
+                self.assertTrue(all(command in ("device_info", "loader info")
+                                    or command.startswith("storage ") for command in fake.commands))
+
+    def test_matching_api_with_wrong_hardware_prevents_storage_writes(self):
+        for api in install.ASSETS:
+            with self.subTest(api=api):
+                fake = FakeFlipper(api=api, target=8)
+                with self.assertRaisesRegex(install.InstallError, "hardware f8"):
+                    self.run_install(fake)
+                self.assertEqual(fake.commands, ["device_info"])
+                self.assertTrue(fake.closed)
+
+    def test_missing_selected_asset_does_not_fall_back_to_other_api(self):
+        (self.asset_dir / install.ASSETS[(88, 9)]).unlink()
+        fake = FakeFlipper(api=(88, 9))
+        with self.assertRaisesRegex(install.InstallError, "bundled Flipper application"):
+            self.run_install(fake)
+        self.assertEqual(fake.commands, ["device_info"])
+        self.assertTrue(fake.closed)
+
+    def test_missing_unused_asset_does_not_block_matching_install(self):
+        (self.asset_dir / install.ASSETS[(87, 1)]).unlink()
+        fake = FakeFlipper(api=(88, 9))
+        self.run_install(fake)
+        self.assertEqual(fake.files, {install.APP_PATH: make_fap((88, 9))})
 
     def test_running_app_prevents_storage_writes_without_exposing_name(self):
         fake = FakeFlipper()
@@ -204,15 +243,41 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(fake.commands, ["device_info", "loader info"])
 
     def test_misnamed_asset_cannot_install_different_api(self):
-        (self.asset_dir / install.ASSET_NAME).write_bytes(make_fap((88, 9)))
-        fake = FakeFlipper()
-        with self.assertRaisesRegex(install.InstallError, "bundled Flipper application"):
-            self.run_install(fake)
-        self.assertEqual(fake.commands, [])
+        for requested, wrong in (((87, 1), (88, 9)), ((88, 9), (87, 1))):
+            with self.subTest(api=requested):
+                (self.asset_dir / install.ASSETS[requested]).write_bytes(make_fap(wrong))
+                fake = FakeFlipper(api=requested)
+                with self.assertRaisesRegex(install.InstallError, "bundled Flipper application"):
+                    self.run_install(fake)
+                self.assertEqual(fake.commands, ["device_info"])
+                self.assertTrue(fake.closed)
 
-    def test_actual_bundled_asset_matches_official_api(self):
-        data = install._asset_bytes(Path(__file__).resolve().parents[1])
-        self.assertGreater(len(data), 1024)
+    def test_asset_with_wrong_hardware_rejected_before_storage_writes(self):
+        for api, name in install.ASSETS.items():
+            with self.subTest(api=api):
+                (self.asset_dir / name).write_bytes(make_fap(api, target=8))
+                fake = FakeFlipper(api=api)
+                with self.assertRaisesRegex(install.InstallError, "bundled Flipper application"):
+                    self.run_install(fake)
+                self.assertEqual(fake.commands, ["device_info"])
+
+    def test_actual_bundled_assets_match_api_and_published_checksums(self):
+        root = Path(__file__).resolve().parents[1]
+        checksums = {line.split()[1]: line.split()[0]
+                     for line in (root / "SHA256SUMS").read_text().splitlines() if line.strip()}
+        for api, name in install.ASSETS.items():
+            with self.subTest(api=api):
+                data = install._asset_bytes(root, api)
+                self.assertGreater(len(data), 1024)
+                self.assertEqual(hashlib.sha256(data).hexdigest(), checksums[name])
+
+    def test_unknown_version_label_can_use_matching_api_without_exposing_custom_name(self):
+        info = install.parse_device_info(
+            b"hardware_model: Flipper Zero\r\nhardware_target: 7\r\n"
+            b"firmware_version: Private nickname\r\nfirmware_api_major: 88\r\nfirmware_api_minor: 9\r\n")
+        self.assertTrue(info.supported)
+        self.assertEqual(info.firmware_version, "Unknown")
+        self.assertNotIn("Private", repr(info))
 
     def test_cancel_before_opening(self):
         cancel = threading.Event()
@@ -314,6 +379,12 @@ class InstallerTests(unittest.TestCase):
     def test_ambiguous_device_info_rejected(self):
         with self.assertRaisesRegex(install.InstallError, "ambiguous"):
             install.parse_device_info(b"firmware_api_major: 87\r\nfirmware_api_major: 88\r\n")
+
+    def test_conflicting_hardware_and_firmware_target_rejected(self):
+        with self.assertRaisesRegex(install.InstallError, "Could not identify"):
+            install.parse_device_info(
+                b"hardware_model: Flipper Zero\r\nhardware_target: 8\r\nfirmware_target: 7\r\n"
+                b"firmware_api_major: 88\r\nfirmware_api_minor: 9\r\n")
 
     def test_console_discovery_omits_radio_and_unrelated_usb(self):
         ports = [SimpleNamespace(device="COM5", vid=0x0483, pid=0x5740, location="4-2:x.0"),
