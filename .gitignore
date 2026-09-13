@@ -1,0 +1,40 @@
+# Local device identity and personal settings
+.local/
+*.dpapi
+.env
+.env.*
+!.env.example
+*credentials*
+*secrets*
+
+# Logs, captures, local backups, and generated archives
+*.log
+*.pcap
+*.pcapng
+*.zip
+*backup*
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local SDK, compiler, and editor output
+.ufbt/
+.ufbt-build/
+dist/
+build/
+*.o
+*.obj
+*.exe
+*.elf
+*.map
+*.pdb
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

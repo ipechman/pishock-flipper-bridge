@@ -1,0 +1,13 @@
+App(
+    appid="pishock_usb_radio",
+    name="PiShock USB Radio",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="pishock_usb_radio_app",
+    requires=["gui"],
+    fap_libs=["subghz"],
+    stack_size=4096,
+    fap_category="Sub-GHz",
+    fap_version="0.2",
+    fap_description="Experimental USB radio bridge for SmallOne shockers",
+    fap_author="Independent community prototype",
+)

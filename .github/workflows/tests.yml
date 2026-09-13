@@ -1,0 +1,44 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python bridge and Windows profile storage
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install host dependencies
+        run: python -m pip install -r host/requirements.txt
+      - name: Run all Python tests
+        run: python -B -m unittest discover -s host -p "test_*.py" -v
+
+  radio-core:
+    name: Portable C encoder and parser
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build native tests with strict warnings
+        run: |
+          mkdir -p build
+          gcc -std=c11 -Wall -Wextra -Werror app/radio_core.c tests/test_radio_core.c -o build/test_radio_core
+      - name: Run native tests
+        run: ./build/test_radio_core
