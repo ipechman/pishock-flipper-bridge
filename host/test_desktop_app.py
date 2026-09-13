@@ -4,6 +4,7 @@ Windows CI runs these normally. Hosts without Tk or a display skip this class;
 the controller, installer and protocol tests remain independent of the GUI.
 """
 from contextlib import ExitStack
+import gc
 from pathlib import Path
 import tempfile
 import threading
@@ -11,6 +12,7 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import weakref
 
 try:
     import tkinter as tk
@@ -43,8 +45,21 @@ class DesktopAppTests(unittest.TestCase):
             raise unittest.SkipTest("Tk has no available display") from None
 
     def setUp(self):
+        # This runs last, after window destruction and all patch cleanup. Tk
+        # variables must be collected on their owner thread, never by a later
+        # synthetic setup worker that happens to trigger cyclic collection.
+        self.addCleanup(self.release_fixture)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        self.worker_threads = []
+        thread_type = threading.Thread
+
+        def setup_thread(*args, **kwargs):
+            thread = thread_type(*args, **kwargs)
+            self.worker_threads.append(thread)
+            return thread
+
+        self.stack.enter_context(patch.object(desktop.threading, "Thread", side_effect=setup_thread))
         self.blocked = []
         for owner, names in (
                 (desktop.service, ("enumerate_ports", "load_profile", "import_profile",
@@ -59,10 +74,29 @@ class DesktopAppTests(unittest.TestCase):
         self.confirm = self.stack.enter_context(patch.object(desktop.messagebox, "askyesno", return_value=False))
         self.picker = self.stack.enter_context(patch.object(desktop.filedialog, "askopenfilename", return_value=""))
         self.app = desktop.BridgeApp(demo=True, first_run=True)
+        self.app_reference = weakref.ref(self.app)
         self.app.withdraw()
         self.app.update_idletasks()
         self.addCleanup(self.destroy_app)
         self.addCleanup(self.assert_no_real_io)
+        self.addCleanup(self.join_workers)
+
+    def join_workers(self):
+        # A queued result can be polled just before its worker actually exits.
+        # Per-test release events run before this cleanup if a test fails early.
+        for thread in self.worker_threads:
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive(), "A synthetic setup worker outlived its test.")
+
+    def release_fixture(self):
+        reference = getattr(self, "app_reference", None)
+        # Dialog mocks retain parent=self.app in call history. Clearing only
+        # self.app is therefore insufficient, even after Tk.destroy().
+        for name in ("app", "confirm", "picker", "blocked", "stack", "worker_threads"):
+            setattr(self, name, None)
+        gc.collect()
+        if reference is not None:
+            self.assertIsNone(reference(), "A completed test retained its Tk window.")
 
     def assert_no_real_io(self):
         for mocked in self.blocked:
