@@ -140,6 +140,20 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                 if beep_only:
                     emit('Beep-only test: shock and vibration are ignored.', flush=True)
                 status('ready')
+                # The add-on owns the minute timer and only transmits while idle.
+                # USB pings continue through backend refresh, so readiness must
+                # explicitly gate RF keep-alives. Every host DISARM clears this
+                # gate; unchanged refreshes must not restart its inactivity timer.
+                try:
+                    client.set_keepalive(True)
+                except RejectedCommand as error:
+                    if safe_rejection_reason(error) != 'INVALID':
+                        raise RadioError('Flipper keep-alive setup failed; reconnect the bridge.') from None
+                    # RADIO1 add-ons from before 0.3 reject this new command.
+                    # Preserve their existing operation support, with an upgrade hint.
+                    status('addon_update_required')
+                else:
+                    status('keepalive_enabled')
             pending, state.pending = state.pending, None
             if pending is not None and configured and state.ready:
                 if clock() - state.pending_at > MAX_EVENT_AGE:

@@ -66,6 +66,7 @@ class DesktopAppTests(unittest.TestCase):
                                    "import_saved_profile", "BridgeSession")),
                 (desktop.installer, ("discover_console_ports", "install_app")),
                 (desktop.webbrowser, ("open",)),
+                (desktop.desktop_tray, ("TrayIcon",)),
                 (desktop, ("profile_path", "preferences_path", "load_preference", "save_preference"))):
             for name in names:
                 mocked = self.stack.enter_context(patch.object(
@@ -226,7 +227,7 @@ class DesktopAppTests(unittest.TestCase):
     def test_connect_cannot_start_a_session_after_close_has_begun(self):
         self.fill_profile()
         self.run_step(self.app.refresh_radio)
-        self.app.close_app()
+        self.app.exit_app()
         with patch.object(self.app.session, "start") as started:
             self.app.connect()
         started.assert_not_called()
@@ -307,8 +308,8 @@ class DesktopAppTests(unittest.TestCase):
         self.app.session = controller
         responsive = []
         with patch.object(self.app, "destroy") as destroyed:
-            self.app.close_app()
-            self.app.close_app()
+            self.app.exit_app()
+            self.app.exit_app()
             self.assertEqual(controller.stops, 1)
             self.assertTrue(self.app.cancel_job.is_set())
             self.assertTrue(self.app.closing)
@@ -333,7 +334,7 @@ class DesktopAppTests(unittest.TestCase):
         self.app._background("Synthetic setup", action, results.append)
         self.assertTrue(entered.wait(1))
         with patch.object(self.app, "destroy") as destroyed:
-            self.app.close_app()
+            self.app.exit_app()
             self.app.update()
             destroyed.assert_not_called()
             release.set()
@@ -374,6 +375,144 @@ class DesktopAppTests(unittest.TestCase):
         self.assertNotIn("DO_NOT_DISPLAY", self.app.task_text.get())
         self.assertIn("could not finish", self.app.task_text.get())
         self.assertFalse(self.app.busy)
+
+    def fake_tray(self, *, available=True):
+        class FakeTray:
+            running = True
+
+            def __init__(self):
+                self.available = available
+                self.events = []
+                self.stop_calls = 0
+
+            def drain_events(self):
+                values, self.events = tuple(self.events), []
+                return values
+
+            def stop(self):
+                self.stop_calls += 1
+                self.available = False
+                self.running = False
+
+        self.app.tray = FakeTray()
+        return self.app.tray
+
+    def test_title_bar_close_hides_without_stopping_connected_bridge(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        native = self.fake_tray()
+        with patch.object(self.app.session, 'request_stop') as stop:
+            self.app.close_app()
+        stop.assert_not_called()
+        self.assertTrue(self.app.hidden_to_tray)
+        self.assertTrue(self.app.session.running)
+        self.assertFalse(self.app.closing)
+        self.assertEqual(self.app.state(), 'withdrawn')
+        self.assertEqual(native.stop_calls, 0)
+
+    def test_failed_tray_cannot_hide_or_strand_the_window(self):
+        self.fake_tray(available=False)
+        with patch.object(self.app, 'withdraw') as hide, patch.object(self.app, 'restore_window') as restore:
+            self.app.close_app()
+        hide.assert_not_called()
+        restore.assert_called_once()
+        self.assertFalse(self.app.closing)
+        self.assertIn('not ready', self.app.task_text.get())
+
+    def test_tray_actions_are_applied_on_tk_thread_and_stop_keeps_app_open(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        native = self.fake_tray()
+        self.app.close_app()
+        native.events.extend(('open', 'stop'))
+        calls = []
+        owner = threading.get_ident()
+        with patch.object(self.app, 'restore_window', side_effect=lambda: calls.append(threading.get_ident())):
+            self.until(lambda: not self.app.session.running)
+        self.assertEqual(calls, [owner])
+        self.assertFalse(self.app.closing)
+        self.assertTrue(native.running)
+
+    def test_lost_tray_restores_hidden_window_with_clear_message(self):
+        native = self.fake_tray()
+        self.app.close_app()
+        native.available = False
+        native.events.append('unavailable')
+        with patch.object(self.app, 'restore_window') as restore:
+            self.until(lambda: restore.called)
+        self.assertIn('unavailable', self.app.task_text.get())
+        self.assertFalse(self.app.closing)
+
+    def test_tray_stop_when_disconnected_does_not_leave_stopping_status(self):
+        native = self.fake_tray()
+        self.assertFalse(self.app.session.running)
+        original = self.app.status_text.get()
+        native.events.append('stop')
+        self.until(lambda: not native.events)
+        self.assertEqual(self.app.status_text.get(), original)
+        self.assertFalse(self.app.closing)
+
+    def test_tray_exit_waits_for_bridge_and_removes_icon_before_destroy(self):
+        native = self.fake_tray()
+        self.app.session.running = True
+        with patch.object(self.app.session, 'request_stop') as stop, patch.object(self.app, 'destroy') as destroyed:
+            native.events.append('exit')
+            self.until(lambda: self.app.closing)
+            stop.assert_called_once()
+            self.assertEqual(native.stop_calls, 0)
+            destroyed.assert_not_called()
+            self.app.session.running = False
+            self.until(lambda: destroyed.called)
+            self.assertFalse(native.running)
+            destroyed.assert_called_once()
+
+    def test_hidden_poll_failure_restores_window_and_preserves_single_timer_exit(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        native = self.fake_tray()
+        self.app.close_app()
+        attempts, later_results = [], []
+
+        def failed_completion(value):
+            attempts.append(True)
+            raise RuntimeError('DO_NOT_DISPLAY_PRIVATE_CALLBACK_DATA')
+
+        def restored():
+            self.app.hidden_to_tray = False
+
+        self.app.busy = True
+        self.app.jobs.put(('done', failed_completion, None))
+        self.app.jobs.put(('done', later_results.append, 'must not run'))
+        with patch.object(self.app, 'restore_window', side_effect=restored) as restore:
+            self.until(lambda: self.app._interface_failed)
+            restore.assert_called_once()
+            self.assertFalse(self.app.hidden_to_tray)
+            self.assertFalse(self.app.session.running)
+            self.assertIn('choose Exit', self.app.detail_text.get())
+            self.assertNotIn('DO_NOT_DISPLAY', self.app.detail_text.get())
+            timer = self.app._poll_id
+            self.assertIsNotNone(timer)
+            self.app.report_callback_exception(RuntimeError, RuntimeError('synthetic'), None)
+            self.assertEqual(self.app._poll_id, timer)
+            self.until(lambda: self.app.jobs.empty())
+            self.assertEqual(attempts, [True])
+            self.assertEqual(later_results, [])
+            timers = [identifier for identifier in self.app.tk.call('after', 'info')
+                      if '_poll' in str(self.app.tk.call('after', 'info', identifier))]
+            self.assertEqual(len(timers), 1)
+            self.app.connect()
+            self.assertFalse(self.app.session.running)
+            with patch.object(self.app, 'destroy') as destroyed:
+                native.events.append('exit')
+                self.until(lambda: destroyed.called)
+                self.assertFalse(native.running)
+                destroyed.assert_called_once()
 
     def test_dark_is_default_and_theme_switch_preserves_connected_state(self):
         self.assertEqual(self.app.appearance.name, 'dark')

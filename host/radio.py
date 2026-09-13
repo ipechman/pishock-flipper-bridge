@@ -104,6 +104,12 @@ class RadioClient:
     def ping(self) -> None:
         self.command("PING", "PING")
 
+    def set_keepalive(self, enabled: bool) -> None:
+        """Gate the add-on's idle, zero-output RF keep-alive for this connection."""
+        if type(enabled) is not bool:
+            raise ValueError("Keep-alive must be enabled or disabled.")
+        self.command(f"AWAKE {int(enabled)}", "AWAKE")
+
     def configure(self, shocker_id: int, channel: int) -> None:
         validate_target(shocker_id, channel)
         self.command(f"SET {shocker_id} {channel}", "SET")
@@ -411,7 +417,7 @@ def main(argv=None) -> int:
             client.hello()
             if args.command == "info":
                 client.ping()
-                print("USB Radio protocol RADIO1 is responding. Check the Flipper screen for arming and limits.")
+                print("USB Radio protocol RADIO1 is responding. Check the Flipper screen for arming.")
             elif args.command == "configure":
                 client.disarm()
                 client.configure(args.shocker_id, args.channel)

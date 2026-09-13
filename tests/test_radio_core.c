@@ -113,6 +113,10 @@ static void test_valid_commands(void) {
     assert(command.type == RadioCommandHello);
     assert(radio_parse_command(" \tPING \r\n", &command));
     assert(command.type == RadioCommandPing);
+    assert(radio_parse_command("AWAKE 1", &command));
+    assert(command.type == RadioCommandAwake && command.enabled);
+    assert(radio_parse_command("AWAKE 0\r\n", &command));
+    assert(command.type == RadioCommandAwake && !command.enabled);
     assert(radio_parse_command("STOP\n", &command));
     assert(command.type == RadioCommandStop);
     assert(radio_parse_command("DISARM\r", &command));
@@ -140,6 +144,8 @@ static void test_valid_commands(void) {
 static void test_invalid_commands(void) {
     const char* invalid[] = {
         "", " ", "hello", "HELLOX", "HELLO 1", "PING!", "PING\nPING", "STOP 1", "DISARMX",
+        "AWAKE", "AWAKE 2", "AWAKE -1", "AWAKE +1", "AWAKE 256", "AWAKE 1 0",
+        "AWAKE 1\nRUN 1 s 100 100", "AWAKEX 1", "AWAKE 1.0",
         "SET", "SET 1", "SET 0 0", "SET 65536 0", "SET 4294967297 0", "SET -1 0",
         "SET +1 0", "SET 1 -1", "SET 1 +1", "SET 1 3", "SET 1 9", "SET 1 256",
         "SET 1 2 extra", "SET 0x1234 0", "SET 1.0 0", "SET 1\n0", "SET 1 0\nRUN 1 v 0 100",
@@ -170,11 +176,91 @@ static void test_invalid_commands(void) {
     assert(!radio_parse_command("HELLO", NULL));
 }
 
+static void test_keepalive_frame(void) {
+    RadioSequence sequence;
+    assert(radio_keepalive_sequence_init(&sequence, 0x1234U, 0U));
+    /* Independent expected stop packet: ID 12 34, channel/type 02,
+     * intensity 00, checksum 48; there is no duration in this packet.
+     */
+    assert(decode_frame(&sequence) == UINT64_C(0x1234020048));
+    assert(sequence.repeats_remaining == 5U);
+    RadioPulse pulse;
+    uint32_t elapsed = 0U;
+    while(radio_sequence_next(&sequence, &pulse)) elapsed += pulse.duration_us;
+    assert(elapsed == 275750U);
+    assert(elapsed <= RADIO_TERMINATOR_MS * 1000U);
+    assert(!radio_keepalive_sequence_init(&sequence, 0U, 0U));
+    assert(!radio_sequence_next(&sequence, &pulse));
+    assert(!radio_keepalive_sequence_init(&sequence, 0x1234U, 3U));
+    assert(!radio_keepalive_sequence_init(NULL, 0x1234U, 0U));
+}
+
+static void test_keepalive_schedule_and_lease(void) {
+    RadioKeepAlive state = {0};
+    assert(!radio_keepalive_due(&state, 100000U, true, true, true));
+    assert(!radio_keepalive_enable(&state, 100U, 60000U, false, true));
+    assert(!radio_keepalive_enable(&state, 100U, 60000U, true, false));
+    assert(!radio_keepalive_enable(&state, 100U, 0U, true, true));
+    assert(!radio_keepalive_enable(&state, 100U, UINT32_MAX, true, true));
+    assert(radio_keepalive_enable(&state, 100U, 60000U, true, true));
+    assert(!radio_keepalive_due(&state, 100U, true, true, true));
+    assert(!radio_keepalive_due(&state, 60099U, true, true, true));
+    assert(radio_keepalive_due(&state, 60100U, true, true, true));
+    /* It cannot interrupt active RF, and the end of that activity postpones
+     * maintenance even when the original timer expired during the operation.
+     */
+    assert(!radio_keepalive_due(&state, 65000U, true, true, false));
+    radio_keepalive_activity(&state, 70000U);
+    assert(!radio_keepalive_due(&state, 70000U, true, true, true));
+    assert(!radio_keepalive_due(&state, 129999U, true, true, true));
+    assert(radio_keepalive_due(&state, 130000U, true, true, true));
+    radio_keepalive_activity(&state, 130300U);
+    assert(!radio_keepalive_due(&state, 190299U, true, true, true));
+    assert(radio_keepalive_due(&state, 190300U, true, true, true));
+    /* Lease expiry is latched, including when no operation is armed. A later
+     * USB PING alone cannot restart maintenance for a failed backend session.
+     */
+    assert(!radio_keepalive_due(&state, 200000U, true, false, true));
+    assert(!state.enabled);
+    assert(!radio_keepalive_due(&state, 300000U, true, true, true));
+    assert(radio_keepalive_enable(&state, 300000U, 60000U, true, true));
+    assert(!radio_keepalive_due(&state, 400000U, false, true, true));
+    assert(!state.enabled);
+    assert(radio_keepalive_enable(&state, 400000U, 60000U, true, true));
+    radio_keepalive_disable(&state);
+    radio_keepalive_activity(&state, 500000U);
+    assert(!radio_keepalive_due(&state, 600000U, true, true, true));
+    /* Tick wrap does not run maintenance early or strand it for a full wrap. */
+    uint32_t start = UINT32_MAX - 20000U;
+    assert(radio_keepalive_enable(&state, start, 60000U, true, true));
+    assert(!radio_keepalive_due(&state, start + 59999U, true, true, true));
+    assert(radio_keepalive_due(&state, start + 60000U, true, true, true));
+    assert(!radio_keepalive_enable(NULL, 0U, 60000U, true, true));
+    assert(!radio_keepalive_due(NULL, 0U, true, true, true));
+    radio_keepalive_disable(NULL);
+    radio_keepalive_activity(NULL, 0U);
+}
+
+static void test_maintenance_is_lower_priority_than_user_output(void) {
+    assert(radio_phase_accepts_run(RadioIdle, false));
+    assert(radio_phase_accepts_run(RadioIdle, true));
+    assert(radio_phase_accepts_run(RadioKeeping, false));
+    assert(radio_phase_accepts_run(RadioKeeping, true));
+    assert(!radio_phase_accepts_run(RadioOperating, false));
+    assert(!radio_phase_accepts_run(RadioEnding, false));
+    assert(radio_phase_accepts_run(RadioOperating, true));
+    assert(radio_phase_accepts_run(RadioEnding, true));
+    assert(!radio_phase_accepts_run((RadioPhase)99, true));
+}
+
 int main(void) {
     test_vectors();
     test_finite_sequences();
     test_valid_commands();
     test_invalid_commands();
-    puts("radio_core: all tests passed (vectors, duration sweep, strict parser)");
+    test_keepalive_frame();
+    test_keepalive_schedule_and_lease();
+    test_maintenance_is_lower_priority_than_user_output();
+    puts("radio_core: all tests passed (vectors, duration sweep, parser, keepalive state)");
     return 0;
 }

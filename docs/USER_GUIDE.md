@@ -6,7 +6,7 @@ You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with
 
 # Install the desktop application
 
-Download PiShockBridge-Setup-0.2.1.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
+Download PiShockBridge-Setup-0.3.0.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
 
 You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
 
@@ -14,9 +14,17 @@ Dark mode is the default. To change it, choose Dark or Light under Appearance in
 
 Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
 
+# Updating from version 0.2
+
+Exit the desktop bridge before running the new Windows installer. In version 0.3, use Exit in the tray menu; the window's X button only hides the window.
+
+After updating the desktop application, open Set up devices and choose Install app to update the Flipper add-on as well. Close the add-on on the Flipper before installing it. This updates only the add-on, keeping your firmware and saved desktop profile.
+
+The new add-on supplies keep-awake and removes the separate local intensity cap. Older add-ons continue accepting website commands, but keep their previous behavior; the desktop app shows an update hint when keep-awake is unavailable.
+
 # If the original version already works for you
 
-You can keep your existing PiShock USB Radio app installed on the Flipper. There is no need to reinstall the add-on or change firmware to use the desktop interface.
+You can import your original profile into the desktop interface. Existing add-ons still accept website commands; update the add-on using Install app for version 0.3's keep-awake and armed/disarmed controls. Your firmware stays unchanged.
 
 1. Stop the original bridge and close its window.
 2. Open PiShock Bridge and select Set up devices.
@@ -28,7 +36,7 @@ The desktop app reads only the file you select. It saves a new encrypted copy fo
 
 # Install the Flipper add-on
 
-Skip this section if a compatible PiShock USB Radio app is already installed and working on your Flipper.
+Skip this section if version 0.3 of PiShock USB Radio is already installed and working on your Flipper.
 
 1. Connect the Flipper to the computer with a USB data cable.
 2. Close any app running on the Flipper and return to its main screen. Close qFlipper and other programs using its USB connection.
@@ -84,9 +92,25 @@ Open PiShock Bridge, open PiShock USB Radio on the USB-connected Flipper, and ch
 
 Beep-only test starts selected whenever you reopen the desktop app. To use the normal supported modes, deselect it while disconnected, then connect. The option is locked during a connection; choose Stop & disconnect before changing it.
 
-Once connected, check the selected target and local intensity limit on the Flipper. Set the limit while disarmed, then press OK to arm. Continue using the existing PiShock website controls.
+Once connected, check the selected target on the Flipper, then press OK to arm. Continue using the existing PiShock website controls. The Flipper has no separate intensity cap: accepted commands use the requested intensity, subject to PiShock permissions and the protocol's normal range.
 
 The desktop app prevents another desktop instance in the same Windows session. Close any original CLI bridge or other program using the Flipper before connecting.
+
+# Keep-awake
+
+While the bridge is connected and ready, the Flipper sends a short zero-output radio packet after approximately 60 seconds of inactivity. It also works while disarmed. Active commands take priority, and activity restarts the inactivity timer.
+
+The packet is the protocol's zero-intensity vibration/stop signal, with no beep or requested stimulation. Although sometimes described as a “0 ms command,” it needs a brief transmission because this radio protocol has no duration field.
+
+Keep-awake stops when you disconnect, exit, lose USB/heartbeat, or the PiShock connection is invalidated. It resumes when the bridge becomes ready again. The computer must remain awake, the shocker powered on, and the shocker in radio range; there is no receiver acknowledgment confirming delivery.
+
+# Keep the bridge in the system tray
+
+The window's X button hides PiShock Bridge in the system tray near the clock. The existing connection and keep-awake continue. If Windows hides the icon, look in the tray's overflow menu.
+
+Double-click the tray icon, or choose Open from its right-click menu, to restore the window. Stop & disconnect ends the connection while leaving the desktop app open. Exit stops and disarms, waits for cleanup, removes the tray icon, and closes the app.
+
+If the tray icon cannot be created or becomes unavailable, the app keeps or restores its window so you can reach the controls. It does not start automatically with Windows.
 
 # Flipper controls
 
@@ -98,15 +122,13 @@ Back: stop and disarm immediately on the Flipper.
 
 Hold Back: exit the add-on and restore the normal USB connection.
 
-Up or Down while disarmed and idle: change the local intensity limit in 5% steps.
-
-The local limit starts at 20% whenever the Flipper app starts. It applies to shock and vibration. A command over the local limit is rejected and current output is stopped; its intensity is not automatically reduced to the limit.
+Up and Down no longer adjust an intensity limit. The only operation state is armed or disarmed. The host accepts intensities from 0 to 100; the CaiXianlin radio protocol maps 100 to its maximum value of 99.
 
 PiShock's website Stop cancels current output. Use Back on the Flipper when you also want to disarm it.
 
 # Stopping and reconnecting
 
-Stop & disconnect requests Stop and Disarm, closes the bridge connection, and releases USB. Closing the desktop window also requests a stop and waits for its current work to finish.
+Stop & disconnect requests Stop and Disarm, disables keep-awake, closes the bridge connection, and releases USB. Exit from the tray menu performs the same cleanup before closing the application. The window's X button only hides the window and keeps the bridge running.
 
 If the application says that Stop could not be confirmed over USB, press Back on the Flipper directly.
 
@@ -146,7 +168,7 @@ Beep-only test deliberately ignores shock and vibration. To change modes, discon
 
 DISARMED means the command was rejected while unarmed. Wait for readiness, press OK on the Flipper, and send a new command.
 
-LIMIT means the request exceeded the Flipper's local intensity limit. Lower the requested intensity or deliberately adjust the local limit while disarmed.
+LIMIT means an older Flipper add-on is still installed. Version 0.3 removes that local limit; use Set up devices → Install app to update the add-on.
 
 BUSY means a nonrepeating command arrived while another operation was active. The running operation is preserved; rejected requests are not queued.
 

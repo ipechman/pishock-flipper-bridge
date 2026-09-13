@@ -39,6 +39,7 @@ class FakeRadio:
         self.calls = []
         self.armed = False
         self.active = None
+        self.keepalive = False
 
     def count(self, name):
         return sum(call[0] == name for call in self.calls)
@@ -55,6 +56,7 @@ class FakeRadio:
         self.calls.append(("disarm",))
         self.armed = False
         self.active = None
+        self.keepalive = False
 
     def stop(self):
         self.calls.append(("stop",))
@@ -67,6 +69,12 @@ class FakeRadio:
 
     def ping(self):
         self.calls.append(("ping",))
+
+    def set_keepalive(self, enabled):
+        if enabled and (not self.count("configure") or not self.count("ping")):
+            raise AssertionError("Keep-alive requires a configured target and USB lease.")
+        self.calls.append(("keepalive", enabled))
+        self.keepalive = enabled
 
     def press_ok(self):
         self.calls.append(("physical_arm",))
@@ -89,8 +97,8 @@ class FakeRadio:
 
 
 class StandaloneTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, scenario, *, error=None, clock=time.monotonic):
-        client = FakeRadio()
+    async def exercise(self, scenario, *, error=None, clock=time.monotonic, client=None, on_status=None):
+        client = FakeRadio() if client is None else client
         logs = []
         finished = asyncio.Event()
 
@@ -115,7 +123,7 @@ class StandaloneTests(unittest.IsolatedAsyncioTestCase):
             done.set()
 
         operation = run_standalone(IDENTITY, client, backend=backend, emit=emit,
-                                   finished=finished, clock=clock)
+                                   finished=finished, clock=clock, on_status=on_status)
         if error is None:
             await asyncio.wait_for(operation, 2.5)
         else:
@@ -123,8 +131,82 @@ class StandaloneTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(operation, 2.5)
         self.assertFalse(client.armed)
         self.assertIsNone(client.active)
+        self.assertFalse(client.keepalive)
         self.assertEqual(client.calls[-2:], [("stop",), ("disarm",)])
         return client, logs
+
+    async def test_keepalive_requires_backend_ready_and_unchanged_refresh_keeps_timer(self):
+        async def scenario(cb, client, _logs):
+            await asyncio.sleep(0.025)
+            self.assertEqual(client.count("keepalive"), 0)
+            cb.snapshot(registration())
+            await asyncio.sleep(0.025)
+            self.assertEqual(client.count("keepalive"), 0)
+            await cb.connect()
+            self.assertTrue(client.keepalive)
+            self.assertFalse(client.armed)
+            names = [entry[0] for entry in client.calls]
+            self.assertLess(names.index("configure"), names.index("keepalive"))
+            self.assertLess(names.index("ping"), names.index("keepalive"))
+            cb.snapshot(registration())
+            cb.ready()
+            await asyncio.sleep(0.025)
+            self.assertEqual(client.count("keepalive"), 1)
+            self.assertEqual(client.attempts, [])
+        await self.exercise(scenario)
+
+    async def test_keepalive_is_disabled_during_revalidation_despite_usb_pings(self):
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            self.assertTrue(client.keepalive)
+            before = client.count("disarm")
+            cb.invalidated()
+            await until(lambda: client.count("disarm") > before)
+            self.assertFalse(client.keepalive)
+            await until(lambda: client.count("ping") >= 2)
+            self.assertFalse(client.keepalive)
+            self.assertEqual(client.count("keepalive"), 1)
+            cb.snapshot(registration())
+            await asyncio.sleep(0.025)
+            self.assertFalse(client.keepalive)
+            cb.ready()
+            await until(lambda: client.count("keepalive") == 2)
+            self.assertTrue(client.keepalive)
+            self.assertFalse(client.armed)
+        await self.exercise(scenario)
+
+    async def test_legacy_addon_gets_upgrade_status_and_preserves_command_support(self):
+        class LegacyRadio(FakeRadio):
+            def set_keepalive(self, enabled):
+                self.calls.append(("keepalive", enabled))
+                raise RejectedCommand("Flipper rejected the command: INVALID")
+
+        statuses = []
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            self.assertFalse(client.keepalive)
+            self.assertIn("addon_update_required", statuses)
+            client.press_ok()
+            cb.message(CHANNEL, command(m="b", i=0), time.monotonic())
+            await until(lambda: len(client.attempts) == 1)
+        await self.exercise(scenario, client=LegacyRadio(), on_status=statuses.append)
+
+    async def test_keepalive_ack_loss_or_nonlegacy_rejection_stops_without_retry(self):
+        for error in (RadioError("Radio response timed out"),
+                      RejectedCommand("Flipper rejected the command: DISARMED")):
+            class BrokenRadio(FakeRadio):
+                def set_keepalive(self, enabled):
+                    self.calls.append(("keepalive", enabled))
+                    raise error
+
+            async def scenario(cb, client, _logs):
+                cb.snapshot(registration())
+                cb.ready()
+                await cb.finished.wait()
+            with self.subTest(error=type(error).__name__):
+                client, _ = await self.exercise(scenario, client=BrokenRadio(), error="timed out|keep-alive setup failed")
+                self.assertEqual(client.count("keepalive"), 1)
+                self.assertEqual(client.attempts, [])
 
     async def test_control_invalidation_clears_pending_and_requires_fresh_ready_and_arm(self):
         async def scenario(cb, client, _logs):

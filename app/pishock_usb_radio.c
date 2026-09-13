@@ -20,16 +20,12 @@
 #define FLAG_BACK (1U << 3)
 #define FLAG_EXIT (1U << 4)
 #define FLAG_OK (1U << 5)
-#define FLAG_UP (1U << 6)
-#define FLAG_DOWN (1U << 7)
-#define FLAGS_ALL 0xFFU
+#define FLAGS_ALL 0x3FU
 
-typedef enum { RadioIdle, RadioOperating, RadioEnding } RadioPhase;
 typedef struct {
     char state[24];
     uint16_t id;
     uint8_t channel;
-    uint8_t cap;
     bool armed;
 } Display;
 
@@ -46,10 +42,12 @@ typedef struct {
     bool ping_seen;
     bool exit_requested;
     bool usb_ready;
+    bool target_configured;
     uint32_t ping_tick;
     uint32_t last_sequence;
     uint32_t deadline;
     RadioPhase phase;
+    RadioKeepAlive keepalive;
     RadioSequence sequence;
     char line[96];
     size_t line_len;
@@ -79,13 +77,19 @@ static void radio_halt(App* app) {
     furi_hal_subghz_sleep();
     furi_hal_power_suppress_charge_exit();
     app->phase = RadioIdle;
+    radio_keepalive_activity(&app->keepalive, furi_get_tick());
 }
 
 static bool radio_start(App* app, char mode, uint8_t intensity, uint32_t ms, RadioPhase phase) {
     furi_assert(app->phase == RadioIdle);
-    if(!radio_sequence_init(
-           &app->sequence, app->current.id, app->current.channel, mode, intensity, ms))
+    bool encoded = phase == RadioKeeping ?
+                       radio_keepalive_sequence_init(&app->sequence, app->current.id, app->current.channel) :
+                       radio_sequence_init(&app->sequence, app->current.id, app->current.channel, mode, intensity, ms);
+    if(!encoded) {
+        radio_keepalive_disable(&app->keepalive);
+        app->current.armed = false;
         return false;
+    }
     furi_hal_subghz_reset();
     furi_hal_subghz_idle();
     furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_ook_650khz_async_regs);
@@ -94,6 +98,8 @@ static bool radio_start(App* app, char mode, uint8_t intensity, uint32_t ms, Rad
     if(!furi_hal_subghz_start_async_tx(radio_yield, app)) {
         furi_hal_subghz_sleep();
         furi_hal_power_suppress_charge_exit();
+        radio_keepalive_disable(&app->keepalive);
+        app->current.armed = false;
         status(app, "Radio TX unavailable");
         return false;
     }
@@ -103,16 +109,26 @@ static bool radio_start(App* app, char mode, uint8_t intensity, uint32_t ms, Rad
 }
 
 static void end_operation(App* app) {
+    if(app->phase == RadioKeeping) {
+        radio_halt(app);
+        return;
+    }
     if(app->phase != RadioOperating) return;
     radio_halt(app);
     // CaiXianlin has no duration field. Send an explicit vibrate-zero terminator.
-    if(!radio_start(app, 'v', 0, 300, RadioEnding)) app->current.armed = false;
+    if(!radio_start(app, 'v', 0, RADIO_TERMINATOR_MS, RadioEnding)) app->current.armed = false;
+}
+
+static void physical_disarm(App* app, const char* reason) {
+    app->current.armed = false;
+    end_operation(app);
+    radio_keepalive_activity(&app->keepalive, furi_get_tick());
+    status(app, reason);
 }
 
 static void disarm(App* app, const char* reason) {
-    app->current.armed = false;
-    end_operation(app);
-    status(app, reason);
+    radio_keepalive_disable(&app->keepalive);
+    physical_disarm(app, reason);
 }
 
 static void queue_reply(App* app, const char* text) {
@@ -133,6 +149,7 @@ static void process_command(App* app) {
         disarm(app, "USB ready / disarmed");
         app->last_sequence = 0;
         app->ping_seen = false;
+        app->target_configured = false;
         queue_reply(app, "OK RADIO1");
         break;
     case RadioCommandPing:
@@ -148,25 +165,39 @@ static void process_command(App* app) {
         }
         app->current.id = cmd.id;
         app->current.channel = cmd.channel;
+        app->target_configured = true;
+        radio_keepalive_disable(&app->keepalive);
         status(app, "Configured / disarmed");
         queue_reply(app, "OK SET");
         break;
+    case RadioCommandAwake:
+        if(!cmd.enabled) {
+            radio_keepalive_disable(&app->keepalive);
+            if(app->phase == RadioKeeping) radio_halt(app);
+            queue_reply(app, "OK AWAKE");
+        } else if(radio_keepalive_enable(
+                      &app->keepalive, furi_get_tick(), furi_ms_to_ticks(RADIO_KEEPALIVE_INTERVAL_MS),
+                      app->target_configured && app->current.id != 0U, lease_valid(app))) {
+            queue_reply(app, "OK AWAKE");
+        } else {
+            if(app->phase == RadioKeeping) radio_halt(app);
+            queue_reply(app, "ERR DISARMED");
+        }
+        break;
     case RadioCommandRun:
     case RadioCommandReplace:
-        if(!app->current.armed || !lease_valid(app)) {
+        if(!app->target_configured || !app->current.armed || !lease_valid(app)) {
             queue_reply(app, "ERR DISARMED");
-        } else if(app->phase != RadioIdle && cmd.type != RadioCommandReplace) {
+        } else if(!radio_phase_accepts_run(app->phase, cmd.type == RadioCommandReplace)) {
             queue_reply(app, "ERR BUSY");
         } else if(cmd.sequence <= app->last_sequence) {
             queue_reply(app, "ERR SEQUENCE");
-        } else if(cmd.mode != 'b' && cmd.intensity > app->current.cap) {
-            queue_reply(app, "ERR LIMIT");
         } else {
             // Consume before touching hardware: an uncertain result is never retried.
             app->last_sequence = cmd.sequence;
             // A fresh, accepted hub update supersedes this target's previous output.
             // Halt DMA before replacing the pulse buffer; no commands are queued.
-            if(cmd.type == RadioCommandReplace) radio_halt(app);
+            if(cmd.type == RadioCommandReplace || app->phase == RadioKeeping) radio_halt(app);
             if(radio_start(app, cmd.mode, cmd.intensity, cmd.duration_ms, RadioOperating)) {
                 status(app, "Transmitting");
                 queue_reply(app, cmd.type == RadioCommandReplace ? "OK REPLACE" : "OK RUN");
@@ -178,6 +209,7 @@ static void process_command(App* app) {
         break;
     case RadioCommandStop:
         end_operation(app);
+        radio_keepalive_activity(&app->keepalive, furi_get_tick());
         status(app, "Stopped");
         queue_reply(app, "OK STOP");
         break;
@@ -252,9 +284,9 @@ static void draw(Canvas* canvas, void* context) {
     canvas_draw_str(canvas, 0, 10, "PiShock USB Radio");
     canvas_set_font(canvas, FontSecondary);
     canvas_draw_str(canvas, 0, 22, d.state);
-    snprintf(buf, sizeof(buf), "ID %u  Ch %u  Limit %u%%", d.id, d.channel, d.cap);
+    snprintf(buf, sizeof(buf), "ID %u  Ch %u", d.id, d.channel);
     canvas_draw_str(canvas, 0, 34, buf);
-    canvas_draw_str(canvas, 0, 46, d.armed ? "ARMED - OK / Back: stop" : "OK: arm   Up/Down: limit");
+    canvas_draw_str(canvas, 0, 46, d.armed ? "ARMED - OK / Back: stop" : "DISARMED - OK: arm");
     canvas_draw_str(canvas, 0, 60, "Hold Back: exit");
 }
 
@@ -264,8 +296,6 @@ static void input(InputEvent* event, void* context) {
     if(event->key == InputKeyBack && event->type == InputTypePress) flag = FLAG_BACK;
     if(event->key == InputKeyBack && event->type == InputTypeLong) flag = FLAG_EXIT;
     if(event->key == InputKeyOk && event->type == InputTypeShort) flag = FLAG_OK;
-    if(event->key == InputKeyUp && event->type == InputTypeShort) flag = FLAG_UP;
-    if(event->key == InputKeyDown && event->type == InputTypeShort) flag = FLAG_DOWN;
     if(flag) furi_thread_flags_set(app->thread, flag);
 }
 
@@ -282,7 +312,6 @@ int32_t pishock_usb_radio_app(void* context) {
     App* app = calloc(1, sizeof(App));
     app->thread = furi_thread_get_current_id();
     furi_thread_set_signal_callback(furi_thread_get_current(), app_signal, app);
-    app->current.cap = 20;
     app->display_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     app->replies = furi_message_queue_alloc(16, 64);
     app->viewport = view_port_alloc();
@@ -309,6 +338,7 @@ int32_t pishock_usb_radio_app(void* context) {
         if(flags & FLAG_LOST) {
             app->connected = false;
             app->ping_seen = false;
+            app->target_configured = false;
             app->last_sequence = 0;
             app->line_len = 0;
             app->drop_line = false;
@@ -316,20 +346,19 @@ int32_t pishock_usb_radio_app(void* context) {
             furi_message_queue_reset(app->replies);
             disarm(app, "USB disconnected");
         }
-        if(app->current.armed && !lease_valid(app)) disarm(app, "Computer timed out");
-        if(flags & (FLAG_BACK | FLAG_EXIT)) disarm(app, "Disarmed");
+        if((app->current.armed || app->keepalive.enabled || app->phase == RadioKeeping) && !lease_valid(app))
+            disarm(app, "Computer timed out");
+        if(flags & FLAG_BACK) physical_disarm(app, "Disarmed");
+        if(flags & FLAG_EXIT) disarm(app, "Disarmed");
         if(flags & FLAG_EXIT) app->exit_requested = true;
         if((flags & FLAG_OK) && !(flags & (FLAG_BACK | FLAG_EXIT | FLAG_LOST))) {
-            if(app->current.armed) disarm(app, "Disarmed");
-            else if(app->usb_ready && app->current.id && lease_valid(app) && app->phase == RadioIdle &&
+            if(app->current.armed) physical_disarm(app, "Disarmed");
+            else if(app->usb_ready && app->target_configured && app->current.id && lease_valid(app) &&
+                    (app->phase == RadioIdle || app->phase == RadioKeeping) &&
                     !app->exit_requested) {
                 app->current.armed = true;
                 status(app, "Armed / waiting");
             } else status(app, "Configure + connect PC");
-        }
-        if(!app->current.armed && app->phase == RadioIdle) {
-            if((flags & FLAG_UP) && app->current.cap < 100) app->current.cap += 5;
-            if((flags & FLAG_DOWN) && app->current.cap > 5) app->current.cap -= 5;
         }
         if(app->phase != RadioIdle &&
            (furi_hal_subghz_is_async_tx_complete() || (int32_t)(furi_get_tick() - app->deadline) >= 0)) {
@@ -341,6 +370,14 @@ int32_t pishock_usb_radio_app(void* context) {
         }
         // Read only one USB packet per pass so traffic cannot starve stop/deadline handling.
         if(app->usb_ready && !app->exit_requested) receive_usb(app);
+        if(!app->exit_requested && radio_keepalive_due(
+               &app->keepalive, furi_get_tick(), app->target_configured && app->current.id != 0U,
+               lease_valid(app), app->phase == RadioIdle)) {
+            // The backend-ready gate and USB lease are independent of arming.
+            // This finite stop frame has zero output; it never replaces an operation.
+            if(radio_start(app, 'v', 0U, RADIO_TERMINATOR_MS, RadioKeeping))
+                status(app, "Keeping shocker awake");
+        }
         if(flags & FLAG_TX) app->usb_tx_busy = false;
         if(app->usb_ready && !app->usb_tx_busy &&
            (furi_hal_cdc_get_ctrl_line_state(USB_IF) & CdcCtrlLineDTR)) {

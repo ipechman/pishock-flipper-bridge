@@ -7,7 +7,8 @@ to build the desktop application, run tests, or rebuild the Flipper add-on.
 
 ## Source layout
 
-- `host/desktop_app.py`, `desktop_theme.py`: desktop window, guided setup, and appearance.
+- `host/desktop_app.py`, `desktop_theme.py`, `desktop_tray.py`: desktop window,
+  guided setup, appearance, and the native Windows tray icon.
 - `host/desktop_service.py`, `desktop_paths.py`, and `flipper_install.py`: desktop
   coordination, private settings, and installation of the Flipper add-on.
 - Other `host/` modules: PiShock bridge, USB connection, and unit tests.
@@ -41,8 +42,8 @@ Omit that argument to build just the portable application and ZIP.
 
 The release files appear in `dist/`:
 
-- `PiShockBridge-Setup-0.2.1.exe`: the end-user installer.
-- `PiShockBridge-0.2.1-windows-x64.zip`: portable application; extract the entire
+- `PiShockBridge-Setup-0.3.0.exe`: the end-user installer.
+- `PiShockBridge-0.3.0-windows-x64.zip`: portable application; extract the entire
   folder and open `PiShockBridge.exe`.
 - `SHA256SUMS.txt`: checksums for the downloadable packages.
 - `BUILD_INFO.json`: tool versions and build validation results.
@@ -77,7 +78,7 @@ first Tk window; this is needed by some Python distributions when frozen.
 For an additional local privacy check, run:
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.2.1-windows-x64
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.0-windows-x64
 ```
 
 The optional `--forbid-text` argument checks additional private values without
@@ -109,6 +110,21 @@ gcc -std=c11 -Wall -Wextra -Werror app/radio_core.c tests/test_radio_core.c -o b
 These tests check independent RF vectors, finite pulse timing, and strict parsing
 of accepted and rejected USB commands. Keep assertions enabled when compiling.
 Passing these tests does not verify RF range or an untested shocker model.
+
+The keep-awake tests check idle scheduling, tick wraparound, session-gate and USB
+lease handling, ordinary-command priority, and the independently decoded
+zero-intensity RF payload. Host tests verify that a backend invalidation disables
+keep-awake even though USB pings may continue, and that an unchanged refresh does
+not restart the timer. Native tray events reach the UI through a queue; mocked
+tests exercise hide/restore/stop/exit without accessing devices or an account.
+
+The desktop 0.3 bridge enables keep-awake with `AWAKE 1` after configuration and a
+valid backend-ready handshake. `AWAKE 0` disables it; host `DISARM` also clears it.
+The Flipper sends zero-intensity vibration frames only after a minute of idle
+time. Physical arming gates operations independently. A pre-0.3 `ERR INVALID`
+response produces an upgrade hint; other errors and missing acknowledgments end
+the connection through normal cleanup. The `RADIO1` handshake remains compatible
+with older host tools.
 
 ## Rebuild the Flipper add-on
 

@@ -10,6 +10,8 @@ The CaiXianlin encoder is adapted from [OpenShock/FlipperZero](https://github.co
 
 Stop behavior was checked against [OpenShock/Firmware](https://github.com/OpenShock/Firmware), commit `025b4436f8e1dd7abc20e83e7c9d1cca50bfd1fd`, `src/radio/RFTransmitter.cpp` and `src/radio/rmt/Sequence.cpp`.
 
+The 0.3 keep-awake behavior follows that same revision's [CommandHandler.cpp](https://github.com/OpenShock/Firmware/blob/025b4436f8e1dd7abc20e83e7c9d1cca50bfd1fd/src/CommandHandler.cpp): an inactivity interval of 60 seconds and a short zero-intensity vibration transmission. The [CaiXianlin packet format](https://wiki.openshock.org/hardware/shockers/caixianlin) has no duration field. The session gate, idle scheduling, command priority, and USB integration were implemented for this project.
+
 The finite transmission iterator, parser, USB application, desktop interface, and host tools were written for this project. No affiliation or endorsement by PiShock, Flipper Devices, Droski1, or OpenShock is implied.
 
 ## Flipper application and installation

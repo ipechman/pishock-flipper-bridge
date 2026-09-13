@@ -9,6 +9,45 @@
 #include <stddef.h>
 #include <string.h>
 
+bool radio_keepalive_enable(
+    RadioKeepAlive* state, uint32_t now, uint32_t interval, bool configured, bool lease_valid) {
+    if(state == NULL) return false;
+    radio_keepalive_disable(state);
+    if(!configured || !lease_valid || interval == 0U || interval > INT32_MAX) return false;
+    state->enabled = true;
+    state->last_activity = now;
+    state->interval = interval;
+    return true;
+}
+
+void radio_keepalive_disable(RadioKeepAlive* state) {
+    if(state != NULL) state->enabled = false;
+}
+
+void radio_keepalive_activity(RadioKeepAlive* state, uint32_t now) {
+    if(state != NULL && state->enabled) state->last_activity = now;
+}
+
+bool radio_keepalive_due(
+    RadioKeepAlive* state, uint32_t now, bool configured, bool lease_valid, bool idle) {
+    if(state == NULL) return false;
+    if(!configured || !lease_valid) radio_keepalive_disable(state);
+    return state->enabled && idle && (uint32_t)(now - state->last_activity) >= state->interval;
+}
+
+bool radio_phase_accepts_run(RadioPhase phase, bool replace) {
+    return phase == RadioIdle || phase == RadioKeeping ||
+           (replace && (phase == RadioOperating || phase == RadioEnding));
+}
+
+bool radio_keepalive_sequence_init(RadioSequence* sequence, uint16_t id, uint8_t channel) {
+    if(id == 0U) {
+        if(sequence != NULL) memset(sequence, 0, sizeof(*sequence));
+        return false;
+    }
+    return radio_sequence_init(sequence, id, channel, 'v', 0U, RADIO_TERMINATOR_MS);
+}
+
 bool radio_sequence_init(
     RadioSequence* sequence,
     uint16_t id,
@@ -143,6 +182,10 @@ bool radio_parse_command(const char* line, RadioCommand* command) {
         parsed.type = RadioCommandHello;
     } else if(take_word(&cursor, "PING")) {
         parsed.type = RadioCommandPing;
+    } else if(take_word(&cursor, "AWAKE")) {
+        parsed.type = RadioCommandAwake;
+        if(!take_uint(&cursor, 0U, 1U, &value)) return false;
+        parsed.enabled = value != 0U;
     } else if(take_word(&cursor, "SET")) {
         parsed.type = RadioCommandSet;
         if(!take_uint(&cursor, 1U, UINT16_MAX, &value)) return false;

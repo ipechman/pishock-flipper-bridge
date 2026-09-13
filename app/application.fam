@@ -7,7 +7,7 @@ App(
     fap_libs=["subghz"],
     stack_size=4096,
     fap_category="Sub-GHz",
-    fap_version="0.2",
+    fap_version="0.3",
     fap_description="Experimental USB radio bridge for SmallOne shockers",
     fap_author="Independent community prototype",
 )

@@ -21,6 +21,10 @@ def preferences_path():
     return profile_path().with_name('appearance.json')
 
 
+class AlreadyRunningError(RuntimeError):
+    """Another desktop instance owns this Windows session."""
+
+
 class InstanceLock:
     """Prevent a second desktop controller in the current Windows session."""
     def __init__(self):
@@ -40,7 +44,7 @@ class InstanceLock:
             raise RuntimeError('Windows could not start the application session.')
         if error == 183:
             library.CloseHandle(handle)
-            raise RuntimeError('PiShock Flipper Bridge is already open. Use its existing window.')
+            raise AlreadyRunningError('PiShock Flipper Bridge is already open. Use its window or icon near the clock.')
         self.handle, self.library = handle, library
 
     def close(self):

@@ -295,7 +295,7 @@ class BridgeSession:
             if rejected:
                 explanations = {
                     "DISARMED": "Command ignored: the Flipper is disarmed. Press OK on the Flipper to arm it.",
-                    "LIMIT": "Command ignored: it exceeds the Flipper's local limit.",
+                    "LIMIT": "Your older Flipper add-on still has a local limit. Install the 0.3 add-on from Set up devices.",
                     "BUSY": "Command ignored: the Flipper is already running an operation.",
                 }
                 self._post("status", explanations[rejected.group(1)])
@@ -305,6 +305,8 @@ class BridgeSession:
             "connecting": ("starting", "Connecting to PiShock…"),
             "revalidating": ("revalidating", "Checking updated PiShock settings. Output is being stopped."),
             "ready": ("ready", "Connected. Press OK on the Flipper when you are ready to arm it."),
+            "keepalive_enabled": ("status", "Keep-awake enabled: idle zero-output radio packets keep the shocker ready."),
+            "addon_update_required": ("status", "Install the 0.3 Flipper add-on from Set up devices to enable keep-awake and remove the old local limit."),
             "stopping": ("stopping", "Stopping and disarming the Flipper…"),
             "stop_unconfirmed": ("warning", "Stop acknowledgment unavailable. Press Back on the Flipper."),
         }

@@ -14,11 +14,12 @@ import webbrowser
 
 import desktop_service as service
 import flipper_install as installer
-from desktop_paths import InstanceLock, preferences_path, profile_path, resource_root
+import desktop_tray
+from desktop_paths import AlreadyRunningError, InstanceLock, preferences_path, profile_path, resource_root
 from desktop_theme import Appearance, load_preference, save_preference
 
 
-VERSION = '0.2.1'
+VERSION = '0.3.0'
 INSPIRATION_URL = 'https://github.com/Droski1/PiShock-Unofficial-Documentation'
 
 
@@ -93,9 +94,13 @@ class BridgeApp(tk.Tk):
         self.profile = None
         self.destination = None if demo else profile_path()
         self.session = DemoSession() if demo else service.BridgeSession()
+        self.tray = None
+        self.hidden_to_tray = False
         self.jobs = queue.Queue()
         self.busy = False
         self.closing = False
+        self._interface_failed = False
+        self._poll_id = None
         self.cancel_job = threading.Event()
         self.controls = []
         self.port_inventory = None
@@ -126,7 +131,10 @@ class BridgeApp(tk.Tk):
                 self.task_text.set('Your saved profile could not be opened. Use setup to import it again.')
         self._update_profile()
         self.show_page('connection' if self.profile else 'setup')
-        self.after(100, self._poll)
+        if not self.demo:
+            self.tray = desktop_tray.TrayIcon(icon)
+            self.tray.start()
+        self._schedule_poll()
 
     def _frame(self, parent, *, bg='card', border=False, **kw):
         frame = tk.Frame(parent, **kw)
@@ -173,7 +181,9 @@ class BridgeApp(tk.Tk):
                                   activebackground='nav_hover', activeforeground='white')
             button.pack(fill='x', padx=12, pady=3)
             self.nav[name] = button
-        self._label(sidebar, 'Desktop app  ' + VERSION + '\nWindows • private local setup',
+        self._button(sidebar, 'Exit PiShock Bridge', self.exit_app, tracked=False).pack(
+            side='bottom', fill='x', padx=24, pady=(0, 12))
+        self._label(sidebar, 'Desktop app  ' + VERSION + '\nX keeps it near the clock',
                     size=9, color='nav_muted', bg='navy').pack(side='bottom', anchor='w', padx=24, pady=25)
         appearance = self._frame(sidebar, bg='navy')
         appearance.pack(side='bottom', fill='x', padx=24)
@@ -262,9 +272,9 @@ class BridgeApp(tk.Tk):
         note = self._card(page)
         self._label(note, 'You stay in control', size=12, bold=True).pack(anchor='w')
         self._label(note, 'Press OK on the Flipper to arm. Back stops and disarms.\n'
-                    'Set the local intensity limit on the Flipper while disarmed; it starts at 20%.',
+                    'Your accepted PiShock intensity settings apply; there is no separate Flipper intensity cap.',
                     color='muted', wraplength=710).pack(anchor='w', pady=(8, 0))
-        self._label(page, 'Keep the original hub unplugged during use. Keep this app open and the computer awake.',
+        self._label(page, 'Keep the original hub unplugged and the computer awake. X keeps the bridge running near the clock.',
                     size=9, color='muted', bg='bg', wraplength=745).pack(anchor='w', pady=9)
 
     def _setup_page(self):
@@ -313,6 +323,7 @@ class BridgeApp(tk.Tk):
         self._heading(page, 'Help, without the guesswork.', 'A quick reference for everyday use, with your full guide one click away.')
         card = self._card(page, pady=14)
         for title, text in [
+            ('Keep it near the clock', 'X hides this window while the bridge keeps running. Use its icon near the clock to reopen it, stop and disconnect, or Exit. Exit stops output before closing.'),
             ('Connect each session', 'Open the Flipper app, choose Find Flipper, then Connect. Once connected, press OK on the Flipper to arm.'),
             ('If a beep is silent', 'Check shocker power, target, pairing and distance. The app can confirm the Flipper accepted a command; only hearing it confirms delivery.'),
             ('If the connection stops', 'Check USB, internet and the computer’s sleep state. Connect again, physically re-arm and send a fresh command. Commands are never replayed.'),
@@ -347,7 +358,7 @@ class BridgeApp(tk.Tk):
         self._update_controls()
 
     def _update_controls(self):
-        locked = self.busy or self.session.running or self.closing
+        locked = self.busy or self.session.running or self.closing or self._interface_failed
         for button in self.controls:
             button.configure(state='disabled' if locked else 'normal')
         for combo in (self.radio_combo, self.console_combo, self.hub_combo, self.shocker_combo):
@@ -357,7 +368,7 @@ class BridgeApp(tk.Tk):
         self.stop_button.configure(state='normal' if self.session.running and not self.closing else 'disabled')
 
     def _background(self, label, action, done):
-        if self.busy or self.session.running or self.closing:
+        if self.busy or self.session.running or self.closing or self._interface_failed:
             return
         self.busy = True
         self.cancel_job.clear()
@@ -507,7 +518,7 @@ class BridgeApp(tk.Tk):
         self.task_text.set('Setup complete. Open the Flipper app, then go to Connection.')
 
     def connect(self):
-        if self.busy or self.session.running or self.closing or not self.profile:
+        if self.busy or self.session.running or self.closing or self._interface_failed or not self.profile:
             return
         ports = self.radio_ports
         index = self.radio_combo.current()
@@ -525,6 +536,8 @@ class BridgeApp(tk.Tk):
         self._update_controls()
 
     def stop(self):
+        if not self.session.running:
+            return
         self.session.request_stop()
         self.status_text.set('Stopping…')
         self.detail_text.set('Stopping output and disconnecting. You can always press Back on the Flipper.')
@@ -537,7 +550,7 @@ class BridgeApp(tk.Tk):
         if kind == 'ready':
             self.status_text.set('Connected · arm on Flipper')
             self.detail_text.set('Press OK on the Flipper to arm, then use PiShock’s website. '
-                                 + ('Beep-only test is on.' if self.beep_only.get() else 'Your Flipper’s local limit applies.'))
+                                 + ('Beep-only test is on.' if self.beep_only.get() else 'Your accepted PiShock settings apply.'))
         elif kind in ('connecting', 'starting'):
             self.status_text.set('Connecting…')
         elif kind in ('revalidating', 'invalidated'):
@@ -563,12 +576,34 @@ class BridgeApp(tk.Tk):
         if event.message and not (kind == 'stopped' and self.last_problem):
             self.task_text.set(event.message)
 
+    def _schedule_poll(self):
+        if self._poll_id is None:
+            self._poll_id = self.after(100, self._poll)
+
     def _poll(self):
+        self._poll_id = None
+        if self.tray is not None:
+            for action in self.tray.drain_events():
+                if action == 'open' and not self.closing:
+                    self.restore_window()
+                elif action == 'stop' and not self.closing:
+                    self.stop()
+                elif action == 'exit':
+                    self.exit_app()
+                elif action == 'unavailable' and not self.closing:
+                    self.restore_window()
+                    self.task_text.set('The icon near the clock is unavailable. Keep this window open, or choose Exit to stop and close.')
         for _ in range(100):
             try:
                 kind, action, value = self.jobs.get_nowait()
             except queue.Empty:
                 break
+            if self._interface_failed:
+                # A failed UI completion is not retried. Drain later worker
+                # completions only to know when safe shutdown can finish.
+                if kind != 'progress':
+                    self.busy = False
+                continue
             if kind == 'progress':
                 self.progress.configure(value=action)
                 self.task_text.set(value)
@@ -581,21 +616,58 @@ class BridgeApp(tk.Tk):
                     else:
                         self.task_text.set(value)
         for event in self.session.drain_events():
-            self._event(event)
-        self._update_controls()
+            if not self._interface_failed:
+                self._event(event)
+        if not self._interface_failed:
+            self._update_controls()
         if self.closing and not self.session.running and not self.busy:
-            self.destroy()
-            return
-        self.after(100, self._poll)
+            if self.tray is not None:
+                self.tray.stop()
+            if self.tray is None or not self.tray.running:
+                self.destroy()
+                return
+        self._schedule_poll()
 
     def close_app(self):
+        """The title-bar X hides only when Windows confirmed a usable icon."""
+        if self.closing:
+            return
+        if self._interface_failed:
+            self.restore_window()
+            return
+        if self.tray is not None and self.tray.available:
+            self.hidden_to_tray = True
+            self.withdraw()
+        else:
+            self.restore_window()
+            self.task_text.set('The icon near the clock is not ready. Keep this window open, or choose Exit to stop and close.')
+
+    def restore_window(self):
+        self.hidden_to_tray = False
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def exit_app(self):
+        """Explicit Exit always performs the existing stop-and-disarm shutdown."""
         if self.closing:
             return
         self.closing = True
+        if self.hidden_to_tray:
+            self.restore_window()
         self.cancel_job.set()
         self.session.request_stop()
         self.task_text.set('Finishing the current step and stopping output before closing…')
         self._update_controls()
+
+    def destroy(self):
+        if getattr(self, '_poll_id', None) is not None:
+            self.after_cancel(self._poll_id)
+            self._poll_id = None
+        tray = getattr(self, 'tray', None)
+        if tray is not None:
+            tray.stop()
+        super().destroy()
 
     def open_website(self):
         if self.demo:
@@ -634,8 +706,22 @@ class BridgeApp(tk.Tk):
 
     def report_callback_exception(self, exc, value, traceback):
         # Do not include private paths, raw USB responses, or network URLs in UI errors.
+        self._interface_failed = True
         self.session.request_stop()
-        self.task_text.set('The interface hit an unexpected error and requested a stop. Press Back on the Flipper, then restart the app.')
+        message = 'The interface hit an unexpected error and requested a stop. Press Back on the Flipper, then choose Exit and restart the app.'
+        self.last_problem = ('warning', message)
+        try:
+            self.restore_window()
+            self.status_text.set('Interface stopped · choose Exit')
+            self.detail_text.set(message)
+            self.task_text.set(message)
+            self._update_controls()
+        except Exception:
+            pass
+        finally:
+            # When _poll itself failed its timer was already consumed. Keep
+            # tray/Exit and completion draining alive without duplicate timers.
+            self._schedule_poll()
 
 
 def self_test():
@@ -681,6 +767,14 @@ def main(argv=None):
             lock.acquire()
         app = BridgeApp(demo=args.demo, first_run=args.first_run)
         app.mainloop()
+    except AlreadyRunningError as error:
+        if desktop_tray.restore_existing():
+            return 0
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo('PiShock Bridge', str(error), parent=root)
+        root.destroy()
+        return 1
     except RuntimeError as error:
         root = tk.Tk()
         root.withdraw()

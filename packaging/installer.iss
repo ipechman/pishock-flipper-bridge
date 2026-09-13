@@ -5,12 +5,13 @@
   #error OutputDir must name the release output directory.
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.2.1"
+  #define AppVersion "0.3.0"
 #endif
 
 [Setup]
 AppId={{D31123D7-525C-440D-BF51-48F92CFC0DC8}
 AppName=PiShock Bridge
+AppMutex=Local\PiShockFlipperBridge.Desktop
 AppVersion={#AppVersion}
 AppPublisher=PiShock Bridge contributors
 AppPublisherURL=https://github.com/ipechman/pishock-flipper-bridge

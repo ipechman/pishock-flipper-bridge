@@ -87,6 +87,9 @@ class FakeRadio:
     def ping(self):
         self._record("ping")
 
+    def set_keepalive(self, enabled):
+        self._record("keepalive", enabled)
+
 
 def wait_for(predicate, timeout=2):
     deadline = time.monotonic() + timeout
@@ -394,7 +397,7 @@ class SessionTests(unittest.TestCase):
             self.assertTrue(self.session.join(2))
         self.assertEqual(self.radio.calls[-2:], [("stop",), ("disarm",)])
         self.assertTrue(self.serial.closed)
-        self.assertTrue(all(call[0] in {"hello", "stop", "disarm", "configure", "ping"} for call in self.radio.calls))
+        self.assertTrue(all(call[0] in {"hello", "stop", "disarm", "configure", "ping", "keepalive"} for call in self.radio.calls))
 
     def test_real_runner_disconnect_attempts_both_stop_measures_and_warns(self):
         real_runner = service.run_standalone

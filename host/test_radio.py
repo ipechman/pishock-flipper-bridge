@@ -100,6 +100,18 @@ class ResponseTests(unittest.TestCase):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_keepalive_session_gate_is_explicit_and_does_not_send_an_operation(self):
+        port = Port(automatic=True)
+        client = radio.RadioClient(port, Clock())
+        client.set_keepalive(True)
+        client.set_keepalive(False)
+        self.assertEqual(port.writes, [b"AWAKE 1\n", b"AWAKE 0\n"])
+        self.assertEqual(client.sequence, 0)
+        for value in (1, 0, None, "1", [], 1.0):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                client.set_keepalive(value)
+        self.assertEqual(len(port.writes), 2)
+
     def test_protocol_boundaries(self):
         radio.validate_target(1, 0)
         radio.validate_target(65535, 2)
