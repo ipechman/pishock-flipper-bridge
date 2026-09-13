@@ -49,10 +49,18 @@ class Mailbox:
 
 
 async def run_standalone(identity, client, *, beep_only=False, backend=run_backend,
-                         emit=print, finished=None, clock=time.monotonic):
+                         emit=print, finished=None, clock=time.monotonic, on_status=None):
     """The event loop alone owns the Flipper serial client and latest command."""
     finished = finished if finished is not None else asyncio.Event()
     state = Mailbox()
+
+    def status(category):
+        # A presentation callback must never interrupt radio cleanup.
+        if on_status is not None:
+            try:
+                on_status(category)
+            except Exception:
+                pass
 
     def on_snapshot(data):
         fresh = snapshot_from_registration(data, identity)
@@ -60,6 +68,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
             state.disarm = True
             state.pending = None
             state.rearm_on_ready = True
+            status('revalidating')
         state.snapshot = fresh
 
     def on_message(channel, payload, received):
@@ -75,6 +84,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
         state.pending = None
         state.disarm = True
         state.rearm_on_ready = True
+        status('revalidating')
 
     def on_ready():
         state.ready = True
@@ -93,6 +103,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
     try:
         client.hello()
         client.disarm()
+        status('connecting')
         emit('Connecting directly to PiShock for your saved hub...', flush=True)
         task = asyncio.create_task(backend(identity, on_snapshot, on_message,
                                          on_invalidated, on_ready, on_failure, finished))
@@ -128,6 +139,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                 emit('Original hub is not needed. Press OK on the Flipper to arm; Back stops the Flipper.', flush=True)
                 if beep_only:
                     emit('Beep-only test: shock and vibration are ignored.', flush=True)
+                status('ready')
             pending, state.pending = state.pending, None
             if pending is not None and configured and state.ready:
                 if clock() - state.pending_at > MAX_EVENT_AGE:
@@ -160,8 +172,10 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
             await asyncio.sleep(0.01)
     finally:
         # Stop the physical output before waiting for network teardown.
+        status('stopping')
         if not stop_and_disarm(client):
             emit('Stop acknowledgment unavailable. Press Back on the Flipper.', flush=True)
+            status('stop_unconfirmed')
         finished.set()
         if task is not None:
             task.cancel()
@@ -169,6 +183,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        status('stopped')
 
 
 def main(argv=None):

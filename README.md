@@ -1,52 +1,43 @@
-# PiShock Flipper USB Bridge
+# PiShock Bridge
 
-Use a Flipper Zero as the radio transmitter for your existing PiShock hub identity:
+A Windows desktop app that lets a Flipper Zero transmit commands from your existing PiShock website controls.
 
-**PiShock website → Windows computer → USB → Flipper Zero → SmallOne shocker**
+**PiShock website → Windows computer → USB → Flipper Zero → your SmallOne shocker**
 
-The original PiShock hub is needed once to import its identity. After setup, leave
-it unplugged: the computer connects to PiShock and forwards commands to the Flipper
-app. The computer must remain connected to the internet and the Flipper by USB.
+Set up devices with buttons, choose a paired shocker, and connect. The original hub is needed once to import your own device identity; unplug it during normal use. The computer stays online, awake, and connected to the Flipper by USB.
 
-This is an experimental community project. It supports one selected SmallOne
-shocker and preserves its registered hub, website controls, and supported share
-permissions. It does not create a new PiShock hub or account.
+## Get started
 
-## Getting started
+Download **PiShockBridge-Setup-0.2.0.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
 
-You need Windows, Python 3.10 or newer, an already claimed PiShock Next/Lite hub
-with a paired SmallOne, and a Flipper Zero. Install the app build that matches the
-Flipper's **existing firmware/API**; no firmware change is required.
+1. In **Set up devices**, find the Flipper and choose **Install app**.
+2. Connect your original hub, choose **Find hub**, then **Read paired devices**.
+3. Choose your shocker and **Save this device**.
+4. Unplug the original hub. Open **PiShock USB Radio** on the Flipper.
+5. In **Connection**, choose **Find Flipper**, then **Connect**. Press **OK** on the Flipper and try a short website beep.
 
-Follow the [user guide](docs/USER_GUIDE.md) to:
+Already using the original version? Keep your working Flipper app and choose **Use an existing CLI profile…** to import its encrypted profile.
 
-1. Install the matching Flipper app and Python dependency.
-2. Import your own hub identity over USB.
-3. Unplug the original hub and test the bridge in beep-only mode.
-4. Start **Start standalone.cmd**, wait for **Direct connection ready**, and
-   physically press **OK** on the Flipper to arm.
+The [full user guide](docs/USER_GUIDE.md) covers setup, migration, everyday controls, and troubleshooting. It is also available in **Help & about** inside the app.
 
-The app starts disarmed with a **20% local intensity cap**. **Back** stops and
-disarms it; **Ctrl+C** stops the computer bridge. Connection failures and permission
-changes require physical re-arming. Network commands cannot arm the Flipper.
+GitHub's source ZIP is source code, not the Windows installer. Contributors can follow [BUILD.md](docs/BUILD.md) to build the application.
 
-## Documentation and source
+## What it supports
 
-- [Setup, daily use, and troubleshooting](docs/USER_GUIDE.md)
-- [Building the Flipper app](docs/BUILD.md)
-- `app/`: Flipper application source
-- `host/`: standalone computer bridge, identity importer, and offline tests
-- [License](LICENSE) and [attribution](NOTICE.md)
+- Windows 10 or 11, 64-bit.
+- An existing PiShock Next or Lite hub identity and one selected, already paired SmallOne shocker.
+- The bundled Flipper add-on targets **official firmware 1.4.3, API 87.1, hardware f7**. Its installer checks compatibility before copying the app. No firmware installation or formatting is required.
+- A compatible PiShock USB Radio app already installed on another API can continue to be used. Skip the installation step; a different API requires its own matching application build.
+- Physical arming, a local intensity limit starting at 20%, beep-only commissioning, and a visible stop/disconnect control.
 
-Run the host tests after creating the environment described in the guide:
+This remains an experimental replacement for the hub's radio and device connection. It needs the computer for internet access. Radio delivery is not acknowledged by the shocker, and some legacy command formats and other hub features are outside its scope.
 
-```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s host -p "test_*.py"
-```
+The new desktop application lives on `main`. The original terminal-based version is preserved on `cli-original`.
 
-The encrypted `.local/` device profile is private and excluded from version
-control. PiShock's device protocol is undocumented and can change. Receiver
-delivery and improved range are not guaranteed; see the guide's limitations.
+## Privacy and acknowledgments
 
-Independent project; not affiliated with PiShock or Flipper Devices. Vendor hub
-firmware is not distributed with this project.
+Device profiles are encrypted for the current Windows account and stored outside the application. The distributed project contains no imported device identities, personal addresses, credentials, or live-session logs. Do not share your `device.dpapi` profile.
+
+**Droski1's [PiShock-Unofficial-Documentation](https://github.com/Droski1/PiShock-Unofficial-Documentation) inspired this project.** Thanks also to OpenShock for its CaiXianlin encoder and protocol references, and Flipper Devices for its application SDK and storage protocol.
+
+Independent community software; no affiliation or endorsement by PiShock, Flipper Devices, Droski1, or OpenShock is implied. See [NOTICE.md](NOTICE.md), [LICENSE](LICENSE), and the [build instructions](docs/BUILD.md).

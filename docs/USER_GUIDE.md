@@ -1,257 +1,179 @@
-# User guide
+# PiShock Bridge user guide
 
-The computer takes over your existing PiShock hub's backend connection. PiShock's
-website sends commands to that hub identity; the computer forwards accepted
-commands over USB to the Flipper, which transmits to the selected shocker.
+PiShock Bridge connects your existing PiShock website controls to a Flipper Zero over USB. The Flipper sends radio commands to your selected shocker. Keep the computer online and awake while using it.
 
-The original hub is needed for the one-time import. During normal operation,
-leave the original hub unplugged and keep the computer, internet connection,
-Flipper USB cable, and bridge window active.
+You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with an SD card and USB data cable, and a SmallOne shocker already paired to a PiShock Next or Lite hub in your own account. Keep the original hub available for the first setup and any later identity import.
 
-## What you need
+# Install the desktop application
 
-- A Windows computer with Python 3.10 or newer.
-- Your own already claimed PiShock Next/Lite hub and a paired SmallOne shocker.
-  The importer checks that the selected shocker is registered on that hub and
-  uses the supported SmallOne model.
-- A Flipper Zero with a compatible app build and a USB data cable.
-- This project extracted into a writable folder on the computer.
+Download PiShockBridge-Setup-0.2.0.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional.
 
-One selected shocker is supported per saved profile. This implementation uses the
-Flipper's internal radio; it does not require an external transmitter module.
+You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
 
-All example port names and IDs below are fictional. Replace them with the values
-for your own devices. Run commands from the project folder.
+Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
 
-## 1. Install the matching Flipper app
+# If the original version already works for you
 
-Check the firmware version and API compatibility of the firmware already on your
-Flipper. Choose the matching application:
+You can keep your existing PiShock USB Radio app installed on the Flipper. There is no need to reinstall the add-on or change firmware to use the desktop interface.
 
-| Existing Flipper firmware | API | Application file |
-| --- | --- | --- |
-| Unleashed 093 | 88.9 | `pishock_usb_radio.fap` |
-| Official 1.4.3 | 87.1 | `pishock_usb_radio-official-1.4.3.fap` |
+1. Stop the original bridge and close its window.
+2. Open PiShock Bridge and select Set up devices.
+3. Choose Use an existing CLI profile….
+4. In the file picker, select the device.dpapi file inside the original project's .local folder.
+5. Wait for setup to complete, then go to the connection steps below.
 
-These are application files, not firmware images. For a different firmware/API,
-follow [the build instructions](BUILD.md) to build against its matching SDK.
-An API mismatch means the app needs a compatible build; changing the Flipper's
-firmware is not a setup step for this project.
+The desktop app reads only the file you select. It saves a new encrypted copy for your Windows account and leaves the original profile intact. Use the same Windows account that created the original profile. If it cannot be opened, import again from your original hub.
 
-Using a Flipper-compatible file manager, copy the chosen `.fap` into the Sub-GHz
-apps folder on the SD card. Open **Apps → Sub-GHz → PiShock USB Radio**. Install
-only the build you intend to use so the menu remains unambiguous.
+# Install the Flipper add-on
 
-The app temporarily exposes an additional USB serial interface. Its radio port
-is different from the Flipper's normal console port. Closing the app restores
-normal USB behavior.
+Skip this section if a compatible PiShock USB Radio app is already installed and working on your Flipper.
 
-## 2. Prepare Python
+1. Connect the Flipper to the computer with a USB data cable.
+2. Close any app running on the Flipper and return to its main screen. Close qFlipper and other programs using its USB connection.
+3. In PiShock Bridge, open Set up devices.
+4. Under Install the Flipper app, choose Find Flipper and select the detected device.
+5. Choose Install app and keep the cable connected until installation finishes.
 
-Open a terminal in the project folder and create a local environment:
+The bundled add-on supports official firmware 1.4.3, API 87.1, hardware f7. Installation checks the Flipper's API and refuses a mismatch before writing application files. For another API, obtain an application build made for that firmware; the contributor build guide explains how.
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r host/requirements.txt
-```
+The installer copies only the add-on and its temporary verification files. It reads the copied application back, verifies it, and keeps a verified backup while replacing an existing copy. Keep power and USB connected through the final copy: Flipper's storage replacement is not guaranteed to be atomic during a power loss.
 
-If the Windows `py` launcher is unavailable, use `python -m venv .venv` for the
-first command. Confirm that this Python installation is version 3.10 or newer.
+Installation does not flash firmware, format the SD card, change radio settings, or start the app. When it finishes, open Apps → Sub-GHz → PiShock USB Radio on the Flipper yourself.
 
-The runtime dependency is `pyserial`; the backend connection uses Python's
-standard library. The launcher prefers the project's `.venv` and otherwise uses
-an available `py` or `python` installation. Creating `.venv` makes dependency
-selection predictable without requiring environment activation.
+# Import your original hub
 
-## 3. Import your original hub once
+Skip this section if you have already imported an existing profile.
 
-Your hub must already belong to your PiShock account, with the intended shocker
-paired and registered. This import reads its identity; it does not claim a new
-hub, pair a different shocker, or change account ownership.
+1. Make sure your original PiShock hub is online and already belongs to your PiShock account.
+2. Connect that hub to the computer by USB.
+3. In Set up devices, choose Find hub.
+4. Select the original hub, then choose Read paired devices.
+5. Select the SmallOne shocker you want to use from the list.
+6. Choose Save this device and wait for the saved message.
+7. Unplug the original hub's USB and power.
 
-1. Keep the shocker off-body for setup.
-2. Make sure the original hub is online, then connect it to the computer by USB.
-   The import needs a valid public IPv4 address reported by the hub. Close other
-   programs that are using its serial port.
-3. List the available ports:
+Reading and saving the hub performs identity checks without sending an operation to the shocker. The import does not pair a new shocker, claim a new hub, or change ownership. Your selected shocker must already be registered to that hub.
 
-   ```powershell
-   .\.venv\Scripts\python.exe host/radio.py list
-   ```
+If a device is already saved, the app asks before replacing its desktop profile. Replacing that profile leaves the original hub and any original CLI profile intact. Only one shocker is selected at a time.
 
-4. Identify the original hub's port. If needed, read its filtered information:
+The original hub must be online because its reported public address is part of the imported identity. The app keeps this imported address; it does not discover a changed public address automatically.
 
-   ```powershell
-   .\.venv\Scripts\python.exe host/radio.py hub-info --port HUB_COM
-   ```
+# Make your first connection
 
-   Replace `HUB_COM` with the original hub's actual port, such as `COM6`. This
-   sends only the hub's information request. It prints a restricted selection of
-   fields, including `clientId` and registered shocker IDs; it does not send an
-   operation. The hub ID and shocker ID are different values.
+1. Leave the original hub unplugged.
+2. Keep the Flipper connected by USB and open PiShock USB Radio on it.
+3. In the desktop app, open Connection.
+4. Choose Find Flipper and select the Flipper radio app.
+5. Leave Beep-only test selected. This mode ignores shock and vibration commands.
+6. Check the displayed hub and shocker, then choose Connect.
+7. Wait for Connected · arm on Flipper.
+8. Press OK on the Flipper to arm it.
+9. With the shocker still powered on and off-body, send one short beep from PiShock's website using your existing hub controls.
 
-5. Import the selected device. For example, **if** your hub ID were `4100`, your
-   shocker ID `1234`, and your hub port `COM6`:
+The Open PiShock button opens the website in your browser. Sign in there if needed; this application does not ask for your PiShock password or API key.
 
-   ```powershell
-   .\.venv\Scripts\python.exe host/setup_identity.py --hub-port COM6 --hub-id 4100 --shocker-id 1234
-   ```
+Hearing the beep confirms that the shocker received that test. The application can report a command accepted by the Flipper, but the shocker does not send back a delivery acknowledgment.
 
-6. Wait for the successful saved-identity message, then unplug the original hub.
+Use Back on the Flipper to disarm, or choose Stop & disconnect to end the desktop connection.
 
-The importer verifies the selected hub, its claimed state, and the supported
-shocker before saving `.local/device.dpapi`. It selects radio channel 0. The
-profile is encrypted for the current Windows account and is not included in the
-public project. Wi-Fi passwords and pairing keys from the information response
-are discarded.
+# Everyday use
 
-Import refuses to overwrite an existing profile. To configure a different hub or
-shocker, use a fresh copy of the project and repeat setup. On another Windows
-account or computer, plan to import from the original hub again.
+Open PiShock Bridge, open PiShock USB Radio on the USB-connected Flipper, and choose Find Flipper followed by Connect. Keep the original hub unplugged, the application open, and the computer awake.
 
-The profile retains the public IPv4 address reported during import; the bridge
-does not discover a new address automatically. If registration fails after your
-network or public IP changes, bring the original hub online on the new network
-and import again into a fresh project copy.
+Beep-only test starts selected whenever you reopen the desktop app. To use the normal supported modes, deselect it while disconnected, then connect. The option is locked during a connection; choose Stop & disconnect before changing it.
 
-## 4. Make the first connection with beep-only mode
+Once connected, check the selected target and local intensity limit on the Flipper. Set the limit while disarmed, then press OK to arm. Continue using the existing PiShock website controls.
 
-1. Leave the original PiShock hub unplugged.
-2. Connect the Flipper to the computer by USB and open **PiShock USB Radio**.
-3. Start the bridge with shock and vibration forwarding disabled:
+The desktop app prevents another desktop instance in the same Windows session. Close any original CLI bridge or other program using the Flipper before connecting.
 
-   ```powershell
-   .\.venv\Scripts\python.exe host/standalone.py --beep-only
-   ```
+# Flipper controls
 
-4. Wait for **Direct connection ready**. Check that the displayed hub and shocker
-   IDs match your selection. On the Flipper, check the target ID and local limit.
-5. Press **OK** on the Flipper to arm it.
-6. With the powered shocker off-body, send one short beep from PiShock's website
-   using the existing hub's controls.
+OK while disarmed and connected: arm the application.
 
-The terminal reports commands accepted by the Flipper. Hearing the beep confirms
-receiver delivery for that test; the terminal acknowledgment alone does not.
-Beep-only mode ignores shock and vibration commands. A shock test is unnecessary
-to check the connection.
+OK while armed: stop and disarm.
 
-Press **Back** on the Flipper to disarm, then **Ctrl+C** in the terminal to end the
-test. Start a new normal session for ordinary use.
+Back: stop and disarm immediately on the Flipper.
 
-## 5. Daily use
+Hold Back: exit the add-on and restore the normal USB connection.
 
-1. Keep the original hub unplugged.
-2. Connect the Flipper by USB and open **PiShock USB Radio**.
-3. Double-click **Start standalone.cmd** and keep the window open.
-4. Wait for **Direct connection ready** and verify the target.
-5. Set the local limit while disarmed, then press **OK** on the Flipper to arm.
-6. Use PiShock's website with the existing hub and shocker.
+Up or Down while disarmed and idle: change the local intensity limit in 5% steps.
 
-The equivalent terminal command is:
+The local limit starts at 20% whenever the Flipper app starts. It applies to shock and vibration. A command over the local limit is rejected and current output is stopped; its intensity is not automatically reduced to the limit.
 
-```powershell
-.\.venv\Scripts\python.exe host/standalone.py
-```
+PiShock's website Stop cancels current output. Use Back on the Flipper when you also want to disarm it.
 
-Do not run two bridge windows or run the original hub at the same time as this
-replacement. Only one program should own the Flipper radio serial port.
+# Stopping and reconnecting
 
-### Flipper controls
+Stop & disconnect requests Stop and Disarm, closes the bridge connection, and releases USB. Closing the desktop window also requests a stop and waits for its current work to finish.
 
-| Control | Result |
-| --- | --- |
-| **OK**, while disarmed and connected | Arms the app |
-| **OK**, while armed | Stops and disarms |
-| **Back** | Stops and disarms |
-| Hold **Back** | Exits the app and restores normal USB mode |
-| **Up / Down**, while disarmed and idle | Changes the local intensity cap in 5% steps |
-| **Ctrl+C** in the bridge terminal | Ends the bridge and requests Stop and Disarm |
+If the application says that Stop could not be confirmed over USB, press Back on the Flipper directly.
 
-The local cap starts at **20%** whenever the app starts. It applies to shock and
-vibration. Commands above that cap are discarded and current output is stopped;
-they are not reduced automatically to the cap. Beep has zero intensity.
+USB loss, loss of the computer heartbeat, or a failed backend connection causes stopping and disarming. Fix the cable, internet connection, or sleep state, then connect again. Press OK on the Flipper and send a fresh command. The bridge does not automatically reconnect or replay commands.
 
-PiShock's website Stop cancels current output. Use **Back** when you want the
-Flipper disarmed as well. If a USB acknowledgment is unavailable, use **Back** on
-the device directly.
+A pause, sharing-permission change, or other configuration update can make the desktop app show Refreshing permissions…. Wait for readiness and physically re-arm on the Flipper. Network commands cannot arm the app.
 
-## Pause, shares, and reconnection
+# Troubleshooting
 
-Before admitting commands, the bridge verifies that PiShock's returned hub,
-owner, and selected shocker match the saved profile. It checks the shocker's
-pause state and accepts shared operations only for an exact known share code.
+## The Flipper is not found
 
-For shares, it enforces pause state, allowed modes, maximum duration, and maximum
-intensity. A duration limit can shorten a request but never lengthen it. The share
-intensity cap also restricts vibration, which is stricter than the inspected
-stock firmware. The Flipper's independent local cap still applies afterward.
+For installation, close the app on the Flipper and choose Find Flipper in Set up devices. For a normal connection, open PiShock USB Radio first and choose Find Flipper in Connection. These steps use different USB interfaces.
 
-Configuration/control messages close admission, clear pending commands, and stop
-and disarm the Flipper while fresh state is obtained. A changed background
-snapshot also stops and disarms. An unchanged routine refresh keeps the current
-validated state active, including Stop delivery.
+Use a data cable, close qFlipper and other bridge windows, reconnect USB, and try Find Flipper again. If several devices are listed, select the one you intend to use.
 
-After a pause/configuration change, permission change, or connection interruption,
-wait for a fresh ready message and physically press **OK** again. If the bridge
-has exited, restart it first. Rejected commands are discarded; they do not play
-later when you arm. Network commands never arm the app, and there is no automatic
-reconnect or operation replay.
+## Installation reports an API mismatch
 
-## Troubleshooting
+The included build is for official firmware 1.4.3, API 87.1. The installer does not change firmware to resolve a mismatch. Keep an existing working add-on, or use a compatible application build for your Flipper's current firmware.
 
-| Symptom | What to check |
-| --- | --- |
-| Flipper reports an app/API mismatch | Use the build for its existing API, or build with that firmware's SDK. |
-| `Configure + connect PC` on the Flipper | Open the app, start the computer bridge, and wait for the ready message before pressing OK. |
-| Flipper port cannot be found | Use a USB data cable, open the app first, close other serial programs, and connect only one Flipper for automatic selection. |
-| Port is busy or access is denied | Close the other bridge window or serial monitor holding that port. |
-| `USB disconnected` or `Computer timed out` | Check the cable and computer power/sleep state, restart the bridge if necessary, then re-arm. |
-| `DISARMED` command rejection | Wait for connection readiness and press OK on the Flipper. Send a fresh command; the rejected one is not retried. |
-| `LIMIT` command rejection | Lower the requested intensity or deliberately change the local cap while disarmed. |
-| `BUSY` command rejection | A nonrepeating request arrived while another operation was active. The running operation is preserved. |
-| Identity import fails | Check the original hub's port, claimed state, hub ID, and registered shocker ID. An existing profile is not overwritten. |
-| Backend connection ends | Check connectivity and the saved device selection. Restart once the cause is resolved and re-arm; service changes may require a software update. |
-| Flipper acknowledges a beep but the shocker is silent | Check power, the selected shocker, pairing, and distance. Keep the original hub unplugged to isolate the radio test. |
+## The hub or paired shocker is missing
 
-For manual port selection, list ports with `host/radio.py list`, identify the
-additional radio interface created by the app, and pass that port explicitly:
+Bring the original hub online, connect its USB cable, and choose Find hub again. Close other programs using that port. Check that the hub belongs to your PiShock account and the intended SmallOne is paired and registered, then choose Read paired devices again.
 
-```powershell
-.\.venv\Scripts\python.exe host/standalone.py --port FLIPPER_COM --beep-only
-```
+## The Flipper says Configure + connect PC
 
-Replace `FLIPPER_COM` with the actual radio port, such as `COM7`. The normal
-Flipper console port is not the app's radio interface.
+Open PiShock USB Radio, choose Find Flipper and Connect on the computer, and wait for readiness before pressing OK. An app that has just opened has not yet received its selected target from the bridge.
 
-## Privacy and supported scope
+## The website beep is silent
 
-Keep `.local/` private. Its device identity acts as a credential even though it
-is encrypted on disk. Do not attach that folder, decrypted profiles, raw hub
-responses, or identifying terminal output to a public issue. A useful report can
-include the app/API version, a redacted error category, and steps to reproduce.
+Check that the shocker is still powered on, the selected target is correct, and the Flipper says it is armed. Keep the shocker in range and the original hub unplugged. Reconnect and send a fresh short beep if needed.
 
-Registration uses verified HTTPS. The device's Redis connection uses plain TCP
-port 6379, matching the inspected stock protocol; the device credential and
-traffic on that connection are not encrypted. This project does not require your
-PiShock account password or API key.
+Beep-only test deliberately ignores shock and vibration. To change modes, disconnect first.
 
-The implementation is experimental and supports one selected SmallOne using the
-CaiXianlin protocol at 433.920 MHz. Existing Flipper radio permissions remain in
-effect. No firmware, region, or transmit-power change is part of setup.
+## The Flipper reports DISARMED, LIMIT, or BUSY
 
-Supported operations last 100–10,000 milliseconds. Repeating commands replace
-current output; nonrepeating commands are refused while busy. There is no command
-queue. Some legacy command formats and other hub features are not supported.
+DISARMED means the command was rejected while unarmed. Wait for readiness, press OK on the Flipper, and send a new command.
 
-The shocker sends no delivery acknowledgment. Local time limits, bounded input,
-and a USB heartbeat safeguard stop output on detected failures, but the incoming
-backend format does not provide a trustworthy original event timestamp. Exact
-end-to-end command age cannot be established. Improved range and long-term
-reliability require measurement in your setup.
+LIMIT means the request exceeded the Flipper's local intensity limit. Lower the requested intensity or deliberately adjust the local limit while disarmed.
 
-The PiShock device protocol can change independently of this project. Keep the
-original hub available: to return to ordinary PiShock operation, stop this bridge,
-disarm/exit the Flipper app, and reconnect the original hub.
+BUSY means a nonrepeating command arrived while another operation was active. The running operation is preserved; rejected requests are not queued.
 
-For development and app builds, see [BUILD.md](BUILD.md). Source attribution and
-licensing are in [NOTICE.md](../NOTICE.md) and [LICENSE](../LICENSE).
+## Connection fails after the network address changes
+
+Bring the original hub online on the new network and repeat the hub import. Confirm replacement of the desktop profile, then unplug the original hub before connecting again. The bridge retains the public address saved during import.
+
+## A saved profile cannot be opened
+
+Use the Windows account that saved it. A profile is encrypted for that account and should not be treated as a portable credential. On a different computer or account, import from your own original hub again.
+
+# Privacy and updates
+
+Your desktop profile is stored at %LOCALAPPDATA%\PiShockFlipperBridge\device.dpapi. You can paste %LOCALAPPDATA%\PiShockFlipperBridge into File Explorer's address bar to find that folder.
+
+The saved identity is encrypted for your Windows account. Wi-Fi passwords and pairing keys are discarded during import. Share the source or installer, not device.dpapi, decrypted profiles, raw hub responses, or screenshots showing your personal device details.
+
+Installing an application update preserves the separate saved profile. Windows Settings can uninstall PiShock Bridge; uninstalling leaves that profile available for a later reinstall. To remove it too, close the app and delete its device.dpapi file using File Explorer.
+
+Registration uses verified HTTPS. The PiShock device connection also uses the original protocol's plain TCP connection, which does not encrypt its credential or traffic. The local profile's encryption does not encrypt that network connection.
+
+The implementation supports one selected SmallOne using the CaiXianlin protocol at 433.920 MHz. Existing Flipper radio permissions remain in effect. Supported operation durations are 100 to 10,000 milliseconds; some older command formats and other hub features are not implemented. Protocol changes at PiShock may require an application update.
+
+The desktop installer and USB file-transfer logic are checked with software tests. Those checks do not establish radio range, receiver delivery, or successful installation on every physical device.
+
+To return to the original hub, choose Stop & disconnect, disarm and exit the Flipper app, then reconnect the original hub.
+
+# Acknowledgments and contributor information
+
+Droski1's [PiShock-Unofficial-Documentation](https://github.com/Droski1/PiShock-Unofficial-Documentation) inspired this project.
+
+OpenShock provided the CaiXianlin encoder and protocol references. Flipper Devices provides the application SDK and USB storage protocol.
+
+This is independent community software. The project source includes [NOTICE.md](../NOTICE.md) and [LICENSE](../LICENSE), with contributor instructions in [BUILD.md](BUILD.md). The desktop application is on main; the original terminal version is preserved on cli-original.

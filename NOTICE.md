@@ -1,31 +1,29 @@
 # Source and license notice
 
-This project is distributed under GNU GPL version 3. See [LICENSE](LICENSE).
-Source for the included compiled applications is in `app/`; build instructions
-are in [docs/BUILD.md](docs/BUILD.md).
+This project is distributed under GNU GPL version 3; source-file license notices apply. See [LICENSE](LICENSE). Source for the included Flipper application is in `app/`; the desktop application and bridge are in `host/`. Build instructions are in [docs/BUILD.md](docs/BUILD.md).
 
-The CaiXianlin encoder is adapted from
-[OpenShock/FlipperZero](https://github.com/OpenShock/FlipperZero), `protocols.c`,
-commit `0457742b12f8853f1b09c73ad7e1b9dc4f8cc8c8`.
+## Inspiration and upstream work
 
-The finite transmission iterator, parser, USB application, and host tools were
-written for this project. No endorsement by PiShock, Flipper Devices, or
-OpenShock is implied.
+**Droski1's [PiShock-Unofficial-Documentation](https://github.com/Droski1/PiShock-Unofficial-Documentation) inspired this project.** Its community documentation was the starting point for exploring PiShock communications.
 
-Stop behavior was checked against [OpenShock/Firmware](https://github.com/OpenShock/Firmware),
-commit `025b4436f8e1dd7abc20e83e7c9d1cca50bfd1fd`,
-`src/radio/RFTransmitter.cpp` and `src/radio/rmt/Sequence.cpp`.
+The CaiXianlin encoder is adapted from [OpenShock/FlipperZero](https://github.com/OpenShock/FlipperZero), `protocols.c`, commit `0457742b12f8853f1b09c73ad7e1b9dc4f8cc8c8`.
 
-The included builds use Flipper Devices' official SDK 1.4.3 (API 87.1, f7)
-and the Unleashed 093 SDK (API 88.9, f7), with toolchain 39.
-These are application builds for those existing firmware versions;
-installing a FAP does not install firmware.
+Stop behavior was checked against [OpenShock/Firmware](https://github.com/OpenShock/Firmware), commit `025b4436f8e1dd7abc20e83e7c9d1cca50bfd1fd`, `src/radio/RFTransmitter.cpp` and `src/radio/rmt/Sequence.cpp`.
 
-The host implementation was checked against PiShock Next firmware
-3.1.4.251129.2525, obtained from the public
-[vendor firmware endpoint](https://do.pishock.com/api/GetLatestFirmware?type=3)
-for static inspection. Vendor firmware is not redistributed.
+The finite transmission iterator, parser, USB application, desktop interface, and host tools were written for this project. No affiliation or endorsement by PiShock, Flipper Devices, Droski1, or OpenShock is implied.
 
-The standalone connection implements the owned-device protocol independently.
-The public package contains no imported device identity or live-session logs.
-Test device IDs, MAC addresses, and IP addresses are synthetic examples.
+## Flipper application and installation
+
+The bundled FAP targets Flipper Devices' **official SDK 1.4.3, API 87.1, hardware f7**, with toolchain 39. Its 54 imported symbols are enabled exports in that official SDK. Installing the FAP installs an add-on application, not firmware.
+
+The desktop installer uses Flipper Devices' existing `device_info`, `loader info`, and USB storage commands. Protocol behavior was checked against the official [storage helper](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/scripts/flipper/storage.py), [storage CLI](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/storage/storage_cli.c), [storage implementation](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/storage/storage_external_api.c), and [loader CLI](https://github.com/flipperdevices/flipperzero-firmware/blob/1.4.3/applications/services/loader/loader_cli.c).
+
+USB uploads and readbacks are implemented independently with bounded length framing. Final storage replacement uses the firmware's copy-and-delete rename behavior and is not guaranteed to be atomic during power loss. The installer never flashes firmware, formats storage, changes radio settings, or starts an application.
+
+## Device protocol and distributed files
+
+The host implementation was checked against PiShock Next firmware 3.1.4.251129.2525, obtained from the public [vendor firmware endpoint](https://do.pishock.com/api/GetLatestFirmware?type=3) for static inspection. Vendor firmware is not redistributed.
+
+The standalone connection implements the owned-device protocol independently. The public package contains no imported device identity or live-session logs. Device IDs, MAC addresses, and IP addresses used in tests and the explicit UI demo are synthetic examples.
+
+The Windows desktop distribution bundles its required Python runtime and libraries. The packaging process includes third-party license notices alongside the application; see the release build instructions for dependency versions.

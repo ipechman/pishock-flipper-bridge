@@ -1,117 +1,102 @@
 # Building and testing
 
-This project builds a Flipper Zero external application (`.fap`) and includes a
-Python bridge for Windows. Building the application does not install or replace
-Flipper firmware. Device setup and everyday use are covered in the [README](../README.md).
+End users should download and run the Windows installer. They do not need Python,
+build tools, or a terminal. The [usage guide](USER_GUIDE.md) covers installation,
+Flipper setup, and everyday operation. This document is for contributors who want
+to build the desktop application, run tests, or rebuild the Flipper add-on.
 
 ## Source layout
 
-- `app/`: application manifest, USB interface, and RF encoder.
-- `host/`: Windows bridge, profile setup, and Python tests.
-- `tests/test_radio_core.c`: portable tests for the RF encoder and command parser.
+- `host/desktop_app.py`: desktop window and guided setup.
+- `host/desktop_service.py`, `desktop_paths.py`, and `flipper_install.py`: desktop
+  coordination, private settings, and installation of the Flipper add-on.
+- Other `host/` modules: PiShock bridge, USB connection, and unit tests.
+- `app/`: external Flipper application manifest, USB interface, and RF encoder.
+- `tests/test_radio_core.c`: portable RF encoder and command parser tests.
+- `packaging/`: Windows build, release privacy audit, and installer definition.
 
-The supplied `.fap` files are compact, stripped application binaries. Full
-application source is included. Personal profiles, credentials, device captures,
-build caches, and debug binaries are excluded from the public package.
+## Build the Windows desktop release
 
-## Python environment
+Use 64-bit Python 3.13 on Windows 10 or 11. The release packages include Python,
+Tk, and pyserial, so those dependencies do not need to be installed by end users.
+The build creates a windowed executable without a command prompt, a portable ZIP,
+and an installer with Start menu and optional desktop shortcuts. Installation is
+per user and does not require administrator access.
 
-Use Python 3.13 for the tested build and test environment. From the repository
-root, create a virtual environment and install the dependencies. The bridge's
-profile storage uses Windows DPAPI, so run the bridge on Windows.
-
-Windows PowerShell:
+From the repository root in PowerShell:
 
 ```powershell
 py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r host/requirements.txt "ufbt==0.2.6"
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\packaging\fetch_inno.ps1 -Destination .\build\tooling
+.\.venv\Scripts\python.exe -B packaging/build_windows.py --work-dir build/desktop --output-dir dist --inno-compiler build/tooling/inno/ISCC.exe
 ```
 
-Linux/macOS, for application builds and portable tests:
+The compiler preparation script downloads the official Inno Setup 6.7.3 package,
+checks its pinned SHA-256 and Windows signature, and uses its documented
+[portable mode](https://jrsoftware.org/ishelp/topic_technotes.htm). It keeps the
+compiler under `build/tooling`, without registering a system installation. An
+existing compatible Inno Setup compiler can also be passed to `--inno-compiler`.
+Omit that argument to build just the portable application and ZIP.
 
-```sh
-python3.13 -m venv .venv
-.venv/bin/python -m pip install -r host/requirements.txt 'ufbt==0.2.6'
-```
+The release files appear in `dist/`:
 
-[uFBT](https://github.com/flipperdevices/flipperzero-ufbt) downloads the selected
-SDK and its required cross compiler on first use. The commands below pin both
-uFBT and the SDK version. The verified SDKs use Flipper toolchain version 39.
+- `PiShockBridge-Setup-0.2.0.exe`: the end-user installer.
+- `PiShockBridge-0.2.0-windows-x64.zip`: portable application; extract the entire
+  folder and open `PiShockBridge.exe`.
+- `SHA256SUMS.txt`: checksums for the downloadable packages.
+- `BUILD_INFO.json`: tool versions and build validation results.
 
-## Select the matching SDK
+The extracted application directory is also available for local testing.
+Do not commit generated release packages to source control; attach the reviewed
+installer and ZIP to a release when publishing. Builds are unsigned unless a
+maintainer separately applies a code-signing certificate. The build scripts do
+not contain a certificate, signing secret, or automatic publication step.
 
-Choose the SDK that matches the firmware already installed on the Flipper.
-These are the two verified build targets:
+### What the release build checks
 
-| Existing firmware | Hardware target | Firmware API | Supplied application |
-| --- | --- | --- | --- |
-| [Official 1.4.3](https://github.com/flipperdevices/flipperzero-firmware/releases/tag/1.4.3) | `f7` | `87.1` | `pishock_usb_radio-official-1.4.3.fap` |
-| [Unleashed 093](https://github.com/DarkFlippers/unleashed-firmware/releases/tag/unlshd-093) | `f7` | `88.9` | `pishock_usb_radio.fap` |
+The packager copies an explicit list of public runtime modules and resources to
+a fresh staging directory. It includes the official firmware add-on, guide,
+README, license, and notices. It excludes profiles, settings, logs, captures,
+tests, Git history, local tools, and compiler debug artifacts.
 
-A different firmware API may require rebuilding against its own SDK. Compatibility
-with other SDKs has not been verified.
+PyInstaller 6.21.0 anonymizes source filenames in its collected Python bytecode.
+The build also opens the executable's compressed Python archives and standard
+library ZIP to check every nested code object for absolute source filenames.
+It scans release files for the builder's home and checkout paths, rejects private
+profile and debug artifacts, and verifies that the executable uses the Windows
+GUI subsystem. This verifies build-path hygiene; it does not replace reviewing
+the source for private information before publishing.
 
-Keep SDK state local to this checkout. Run the appropriate setup block from the
-repository root, then choose **one** of the build blocks below.
+After that audit, the packaged executable runs `--self-test`. This verifies
+imports, bundled resources, and creation of a hidden Tk window without reading a
+profile, enumerating USB devices, connecting to PiShock, or transmitting RF.
+The packaging runtime hook initializes the bundled Tcl 8.6 library before the
+first Tk window; this is needed by some Python distributions when frozen.
 
-Windows PowerShell:
+For an additional local privacy check, run:
 
 ```powershell
-$env:UFBT_HOME = Join-Path $PWD ".ufbt-build"
-$env:PATH = (Join-Path $PWD ".venv\Scripts") + [IO.Path]::PathSeparator + $env:PATH
-Set-Location app
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.2.0-windows-x64
 ```
 
-Linux/macOS:
-
-```sh
-export UFBT_HOME="$PWD/.ufbt-build"
-export PATH="$PWD/.venv/bin:$PATH"
-cd app
-```
-
-Build for official firmware 1.4.3:
-
-```sh
-ufbt update --branch=1.4.3 --hw-target=f7
-ufbt
-```
-
-Or build for Unleashed 093 using its fixed SDK archive:
-
-```sh
-ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-093/flipper-z-f7-sdk-unlshd-093.zip --hw-target=f7
-ufbt
-```
-
-The result is `app/dist/pishock_usb_radio.fap`, relative to the repository root.
-Both targets produce that same filename. Copy the official build to a separate
-file before building the Unleashed variant if you need both. uFBT also produces
-debug artifacts under `app/dist/debug/`; keep those local. Source builds can
-contain compiler-specific metadata and need not be byte-for-byte identical to
-the supplied binaries.
+The optional `--forbid-text` argument checks additional private values without
+printing any matching value. Avoid committing commands or reports containing
+those private values.
 
 ## Run the tests
 
-Run these commands from the repository root. The Python suite uses synthetic
-identities and mocked serial/network connections. It does not need a hub,
-Flipper, account, or saved profile.
-
-Windows PowerShell:
+From the repository root:
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -s host -p "test_*.py" -v
 ```
 
-Linux/macOS:
-
-```sh
-.venv/bin/python -B -m unittest discover -s host -p 'test_*.py' -v
-```
-
-The DPAPI round-trip test runs on Windows and is skipped on other platforms.
-The suite checks parsing, permissions and pause handling, transport failures,
-profile handling, and bridge behavior.
+Tests use synthetic identities and mocked serial/network connections. They do
+not need a hub, Flipper, account, or saved profile. The DPAPI round-trip test runs
+on Windows and is skipped on other platforms. The suite checks parsing,
+permissions, pause handling, transport failures, private profile handling, and
+bridge behavior.
 
 For the portable C tests, use a native C11 compiler such as GCC on Linux:
 
@@ -121,11 +106,41 @@ gcc -std=c11 -Wall -Wextra -Werror app/radio_core.c tests/test_radio_core.c -o b
 ./build/test_radio_core
 ```
 
-These tests check independent RF vectors, finite pulse timing over the supported
-duration range, and strict parsing of accepted and rejected USB commands. Keep
-assertions enabled when compiling the tests.
+These tests check independent RF vectors, finite pulse timing, and strict parsing
+of accepted and rejected USB commands. Keep assertions enabled when compiling.
+Passing these tests does not verify RF range or an untested shocker model.
 
-The [GitHub Actions workflow](../.github/workflows/tests.yml) runs the full Python
-suite on Windows with Python 3.13 and the portable C tests on Ubuntu. It does not
-build or install firmware, contact PiShock, or publish artifacts. Passing these
-tests does not verify real RF range or compatibility with an untested shocker.
+## Rebuild the Flipper add-on
+
+The add-on is a normal external `.fap` application. Custom firmware is not
+required. Building or installing this add-on does not replace Flipper firmware.
+The supplied `pishock_usb_radio-official-1.4.3.fap` targets official firmware
+1.4.3, hardware `f7`, API `87.1`. Other firmware APIs may require a matching build.
+
+Install [uFBT](https://github.com/flipperdevices/flipperzero-ufbt), then build with
+the official SDK from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "ufbt==0.2.6"
+$env:UFBT_HOME = Join-Path $PWD '.ufbt-build'
+$env:PATH = (Join-Path $PWD '.venv\Scripts') + [IO.Path]::PathSeparator + $env:PATH
+Set-Location app
+ufbt update --branch=1.4.3 --hw-target=f7
+ufbt
+```
+
+uFBT downloads the selected SDK and compiler on first use. The resulting add-on
+is `app/dist/pishock_usb_radio.fap`, relative to the repository root. Copy the
+release `.fap` to `pishock_usb_radio-official-1.4.3.fap` only after checking that it
+matches the documented target. Keep `app/dist/debug/` and other debug artifacts
+local. Rebuild the desktop release to include a changed add-on.
+
+## GitHub Actions
+
+The [workflow](../.github/workflows/tests.yml) runs Python tests on Windows and C
+tests on Ubuntu for pushes and pull requests, with read-only repository access.
+To build Windows downloads, use **Actions → Tests and desktop build → Run
+workflow**, select **Build the Windows installer and portable application**, and
+run it. The build waits for both test jobs, checks the packaged application, and
+saves downloadable artifacts for 14 days. It does not create a release, push
+commits, contact PiShock, or install firmware.
