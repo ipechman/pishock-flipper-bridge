@@ -2,7 +2,7 @@
 
 Date: 2026-10-05
 
-Status: Written design approved on 2026-10-05. The user additionally confirmed that installation from the bridge must automatically assign the selected shocker's target. Controller implementation has not started.
+Status: Written design and implementation plan approved on 2026-10-05. Implemented locally with automatic selected-target assignment, software verification, and independent review. Physical controller installation, input/display, and receiver-delivery validation remain pending.
 
 ## Purpose
 
