@@ -46,8 +46,11 @@ jobs:
         run: |
           mkdir -p build
           gcc -std=c11 -Wall -Wextra -Werror app/radio_core.c tests/test_radio_core.c -o build/test_radio_core
+          gcc -std=c11 -Wall -Wextra -Werror controller/controller_core.c tests/test_controller_core.c -o build/test_controller_core
       - name: Run native tests
-        run: ./build/test_radio_core
+        run: |
+          ./build/test_radio_core
+          ./build/test_controller_core
 
   desktop:
     name: Build Windows desktop application
@@ -83,3 +86,4 @@ jobs:
             dist/BUILD_INFO.json
           if-no-files-found: error
           retention-days: 14
+
