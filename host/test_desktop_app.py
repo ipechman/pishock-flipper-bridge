@@ -135,6 +135,104 @@ class DesktopAppTests(unittest.TestCase):
             shockers=[SimpleNamespace(shocker_id=1234, label="SmallOne 1234 (demo)")])
         self.app._fill(self.app.shocker_combo, self.app.discovery.shockers)
 
+    def test_controller_requires_profile_console_and_idle_session(self):
+        self.assertTrue(self.app.controller_install_button.instate(['disabled']))
+        self.fill_profile()
+        self.assertIn('1234', self.app.controller_target.get())
+        self.assertTrue(self.app.controller_install_button.instate(['disabled']))
+        self.run_step(self.app.refresh_consoles)
+        self.assertFalse(self.app.controller_install_button.instate(['disabled']))
+        for attribute in ('busy', 'closing'):
+            setattr(self.app, attribute, True)
+            self.app._update_controls()
+            self.assertTrue(self.app.controller_update_button.instate(['disabled']))
+            setattr(self.app, attribute, False)
+        for kind in ('bridge', 'direct'):
+            self.app.session_kind = kind
+            self.app.session.running = True
+            self.app._update_controls()
+            self.assertTrue(self.app.controller_install_button.instate(['disabled']))
+        self.app.session.running = False
+
+    def test_controller_install_and_update_capture_selected_scalars(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_consoles)
+        for update in (False, True):
+            self.app.demo = False
+            entered, release = threading.Event(), threading.Event()
+            self.addCleanup(release.set)
+            calls = []
+            def setup(*args, **kwargs):
+                calls.append(args)
+                entered.set()
+                release.wait(2)
+                return SimpleNamespace()
+            name = 'update_controller_target' if update else 'install_controller'
+            with patch.object(desktop.controller_setup, name, side_effect=setup):
+                self.app.setup_controller(update=update)
+                self.until(entered.is_set)
+                self.assertNotIn('verified', self.app.controller_text.get())
+                self.app.profile = SimpleNamespace(hub_id=1, shocker_id=4321, channel=2)
+                release.set()
+                self.until(lambda: not self.app.busy)
+            expected = ('COM5', 4321, 2) if update else ('COM5', desktop.resource_root(), 1234, 0)
+            self.assertEqual(calls, [expected])
+            self.assertIn('4321' if update else '1234', self.app.controller_text.get())
+            self.assertIn('verified', self.app.controller_text.get())
+        self.app.demo = True
+
+    def test_controller_partial_failure_and_exit_wait_for_cleanup(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_consoles)
+        self.app.demo = False
+        message = 'Controller app verified, but target was not verified. Update controller target.'
+        with patch.object(desktop.controller_setup, 'install_controller', side_effect=desktop.installer.InstallError(message)):
+            self.run_step(self.app.install_controller)
+        self.assertIn(message, self.app.controller_text.get())
+        self.assertFalse(self.app.controller_update_button.instate(['disabled']))
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def setup(*args, **kwargs):
+            entered.set()
+            release.wait(2)
+        with patch.object(desktop.controller_setup, 'install_controller', side_effect=setup), patch.object(self.app, 'destroy') as destroyed:
+            self.app.install_controller()
+            self.until(entered.is_set)
+            self.app.exit_app()
+            self.app.update()
+            destroyed.assert_not_called()
+            self.assertTrue(self.app.cancel_job.is_set())
+            release.set()
+            self.until(lambda: not self.app.busy)
+            destroyed.assert_called_once()
+        self.app.demo = True
+
+    def test_controller_buttons_reachable_at_minimum_size_in_both_themes(self):
+        self.app.geometry('900x650')
+        self.app.deiconify()
+        self.app.show_page('setup')
+        for theme in ('Light', 'Dark'):
+            self.app.theme_choice.set(theme)
+            self.app._appearance_changed()
+            self.app.update()
+            host = self.app.page_hosts['setup']
+            host.canvas.yview_moveto(1)
+            self.app.update()
+            for button in (self.app.controller_install_button, self.app.controller_update_button):
+                self.assertTrue(button.winfo_ismapped())
+                self.assertGreaterEqual(button.winfo_rooty(), host.canvas.winfo_rooty())
+                self.assertLess(button.winfo_rooty() + button.winfo_height(), host.canvas.winfo_rooty() + host.canvas.winfo_height())
+
+    def test_demo_controller_never_calls_setup_service(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_consoles)
+        with patch.object(desktop.controller_setup, 'install_controller') as install, patch.object(
+                desktop.controller_setup, 'update_controller_target') as update:
+            self.run_step(self.app.install_controller)
+            self.run_step(self.app.update_controller_target)
+        install.assert_not_called()
+        update.assert_not_called()
+
     def test_first_run_requires_setup_and_does_not_scan_or_load_automatically(self):
         self.assertIsNone(self.app.profile)
         self.assertEqual(self.app.current_page, "setup")

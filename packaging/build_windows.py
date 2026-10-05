@@ -18,11 +18,11 @@ import zipfile
 from audit_bundle import audit_bundle
 
 
-VERSION = '0.3.2'
+VERSION = '0.4.0'
 SOURCE = Path(__file__).resolve().parents[1]
 RUNTIME_FILES = (
     'host/desktop_app.py', 'host/desktop_service.py', 'host/desktop_paths.py', 'host/desktop_theme.py',
-    'host/desktop_tray.py', 'host/direct_test.py',
+    'host/desktop_tray.py', 'host/controller_setup.py', 'host/direct_test.py',
     'host/flipper_install.py', 'host/device_backend.py', 'host/device_policy.py',
     'host/device_transport.py', 'host/identity.py', 'host/radio.py',
     'host/serial_mirror.py', 'host/setup_identity.py', 'host/standalone.py',
@@ -31,6 +31,7 @@ RUNTIME_FILES = (
 )
 RESOURCE_FILES = (
     'pishock_usb_radio-official-1.4.3.fap', 'pishock_usb_radio-api-88.9.fap', 'README.md', 'LICENSE',
+    'pishock_controller-official-1.4.3.fap', 'pishock_controller-api-88.9.fap',
     'NOTICE.md', 'CHANGELOG.md', 'docs/USER_GUIDE.md', 'assets/bridge.ico',
 )
 LICENSE_FILES = ('pyserial.txt', 'Tcl.txt', 'Tk.txt', 'OpenSSL.txt', 'README.md')

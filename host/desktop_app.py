@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import webbrowser
 
 import desktop_service as service
+import controller_setup
 import direct_test
 import flipper_install as installer
 import desktop_tray
@@ -21,7 +22,7 @@ from desktop_paths import AlreadyRunningError, InstanceLock, preferences_path, p
 from desktop_theme import Appearance, load_preference, save_preference
 
 
-VERSION = '0.3.2'
+VERSION = '0.4.0'
 INSPIRATION_URL = 'https://github.com/Droski1/PiShock-Unofficial-Documentation'
 
 
@@ -164,6 +165,8 @@ class BridgeApp(tk.Tk):
         self.beep_only = tk.BooleanVar(value=True)
         self.task_text = tk.StringVar(value='Ready when you are.')
         self.install_text = tk.StringVar(value='Bundled add-ons support API 87.1 (official 1.4.3) and API 88.9 on hardware f7.')
+        self.controller_target = tk.StringVar(value='No saved target. Import your hub first.')
+        self.controller_text = tk.StringVar(value='Close any Flipper app and qFlipper before setup.')
         self.hub_text = tk.StringVar(value='Connect your original hub, then find and read it.')
         self.current_page = 'connection'
         self._shell()
@@ -369,6 +372,19 @@ class BridgeApp(tk.Tk):
                     color='muted', wraplength=710).pack(anchor='w', pady=(6, 10))
         self._button(bottom, 'Go to connection', lambda: self.show_page('connection')).pack(anchor='w')
 
+        card = self._card(page, pady=12)
+        self._label(card, 'Standalone controller', size=14, bold=True).pack(anchor='w')
+        self._label(card, textvariable=self.controller_target, bold=True).pack(anchor='w', pady=8)
+        self._label(card, 'Use the Flipper selected above. Close any running Flipper app and qFlipper. '
+                    'Installation assigns your saved target automatically; shared downloads stay generic.',
+                    color='muted', wraplength=710).pack(anchor='w', pady=(0, 10))
+        self.controller_install_button = self._button(card, 'Install standalone controller', self.install_controller, primary=True)
+        self.controller_install_button.pack(anchor='w', pady=(0, 8))
+        self.controller_update_button = self._button(card, 'Update controller target', self.update_controller_target)
+        self.controller_update_button.pack(anchor='w')
+        self._label(card, textvariable=self.controller_text, size=9, color='muted', wraplength=710).pack(anchor='w', pady=10)
+        self.console_combo.bind('<<ComboboxSelected>>', lambda event: self._update_controls())
+
     def _troubleshoot_page(self):
         page = self.pages['troubleshoot']
         self._heading(page, 'Try one direct beep.',
@@ -439,6 +455,8 @@ class BridgeApp(tk.Tk):
                                   foreground='white' if key == name else 'nav_ink')
 
     def _update_profile(self):
+        self.controller_target.set(f"Saved target: ID {self.profile.shocker_id} - channel {self.profile.channel}"
+                                   if self.profile else "No saved target. Import your hub first.")
         if self.profile:
             self.target_text.set(f'Hub {self.profile.hub_id}  /  Shocker {self.profile.shocker_id}')
             self.detail_text.set('Open PiShock USB Radio on your Flipper, find it below, then connect.')
@@ -457,6 +475,9 @@ class BridgeApp(tk.Tk):
             button.configure(state='disabled' if locked else 'normal')
         for combo in (self.radio_combo, self.direct_radio_combo, self.console_combo, self.hub_combo, self.shocker_combo):
             combo.configure(state='disabled' if locked else 'readonly')
+        console_selected = 0 <= self.console_combo.current() < len(self.console_ports)
+        for button in (self.controller_install_button, self.controller_update_button):
+            button.configure(state='normal' if self.profile and console_selected and not locked else 'disabled')
         self.mode_toggle.configure(state='disabled' if locked else 'normal')
         self.connect_button.configure(state='normal' if self.profile and not locked else 'disabled')
         self.stop_button.configure(state='normal' if self.session.running and not self.closing else 'disabled')
@@ -549,6 +570,42 @@ class BridgeApp(tk.Tk):
                                   if not self.demo else 'Demo installation complete. No files were sent to a device.')
             self.task_text.set('Flipper app step complete. Next, import your original hub.')
         self._background('Checking firmware compatibility and installing the Flipper add-on…', action, done)
+
+    def install_controller(self):
+        self.setup_controller(update=False)
+
+    def update_controller_target(self):
+        self.setup_controller(update=True)
+
+    def setup_controller(self, *, update=False):
+        if self.busy or self.session.running or self.closing or self._interface_failed:
+            return
+        if not self.profile:
+            self.task_text.set('Import your hub and save a target first.')
+            return
+        index = self.console_combo.current()
+        if not 0 <= index < len(self.console_ports):
+            self.task_text.set('Choose Find Flipper and select a device first.')
+            return
+        port = self.console_ports[index].device
+        shocker_id, channel = self.profile.shocker_id, self.profile.channel
+        demo, assets = self.demo, resource_root()
+        self._controller_job = True
+        self.controller_text.set('Checking target; verification pending...')
+        def action():
+            if demo:
+                return None
+            options = dict(cancel=self.cancel_job, progress=lambda percent, message:
+                           self.jobs.put(('progress', percent, message)))
+            if update:
+                return controller_setup.update_controller_target(port, shocker_id, channel, **options)
+            return controller_setup.install_controller(port, assets, shocker_id, channel, **options)
+        def done(result):
+            self.controller_text.set('Demo complete. No device files were written.' if demo else
+                                     f'Controller target verified: ID {shocker_id} - channel {channel}. '
+                                     'Open Apps > Sub-GHz > PiShock Controller.')
+            self.task_text.set(self.controller_text.get())
+        self._background('Updating controller target...' if update else 'Installing standalone controller...', action, done)
 
     def refresh_hubs(self):
         def done(inventory):
@@ -831,6 +888,9 @@ class BridgeApp(tk.Tk):
                         action(value)
                     else:
                         self.task_text.set(value)
+                        if getattr(self, '_controller_job', False):
+                            self.controller_text.set(value + ' Close the Flipper app and qFlipper, then retry setup.')
+                self._controller_job = False
         for event in self.session.drain_events():
             if not self._interface_failed:
                 self._event(event)
@@ -951,6 +1011,8 @@ def self_test():
             return 2
     for api in installer.ASSETS:
         installer._asset_bytes(resource_root(), api)
+    for api in controller_setup.CONTROLLER_ASSETS:
+        controller_setup._asset_bytes(resource_root(), api)
     # Build every real page with a synthetic profile and a simulated controller.
     # This also checks packaged ttk themes/icons without opening a device.
     probe = BridgeApp(demo=True, first_run=True)
