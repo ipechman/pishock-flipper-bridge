@@ -209,10 +209,10 @@ static void draw_callback(Canvas* canvas, void* context) {
     snprintf(text, sizeof(text), "%c Duration: %lu.%lu s", s->selection == ControllerSelectionDuration ? '>' : ' ',
              (unsigned long)(s->duration_ms / 1000), (unsigned long)((s->duration_ms % 1000) / 100));
     canvas_draw_str(canvas, 0, 39, text);
-    const char* status = display.tx_failed ? "TX failed: DISARMED" :
-                         s->phase == ControllerPhaseOperating ? "RUNNING" :
+    const char* status = s->phase == ControllerPhaseOperating ? "RUNNING" :
                          s->phase == ControllerPhaseTerminating ? "STOPPING" :
-                         s->armed ? "ARMED: release, OK" : "DISARMED: hold OK";
+                         s->armed ? "ARMED: release, OK" :
+                         display.tx_failed ? "TX failed: DISARMED" : "DISARMED: hold OK";
     canvas_draw_str(canvas, 0, 50, status);
     canvas_draw_str(canvas, 0, 62, "Back stop; hold exit");
 }

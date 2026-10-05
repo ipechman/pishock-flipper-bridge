@@ -228,7 +228,7 @@ Use the public helper with a locally available f7 SDK and matching compiler tool
 .\.venv\Scripts\python.exe -B packaging/build_controller.py --sdk <SDKdir> --toolchain <toolchaindir> --work-dir <stagingdir> --output <fap>
 ```
 
-Replace the placeholders with local SDK, toolchain, staging, and output paths. Build separately against API 87.1 (official firmware 1.4.3) and API 88.9; inspect each resulting FAP's embedded metadata and imports against its SDK before registering it as an asset. Keep staging and compiler debug artifacts local. The helper uses local build tools and does not contact a device, install firmware, or read a saved profile.
+Replace the placeholders with local SDK, toolchain, staging, and output paths. `SDKdir` is the uFBT state directory containing `current`; `toolchaindir` contains `toolchain/x86_64-windows`. The helper currently supports this Windows build layout. Build separately against API 87.1 (official firmware 1.4.3) and API 88.9; inspect each resulting FAP's embedded metadata and imports against its SDK before registering it as an asset. Keep staging and compiler debug artifacts local. The helper uses local build tools and does not contact a device, install firmware, or read a saved profile.
 
 Controller source, public asset manifest, and `SHA256SUMS` belong in the repository. After replacing a release FAP, update its manifest/checksum and rebuild the desktop package so its bundled bytes agree. Never put a real `target.conf`, `device.dpapi`, or decrypted profile in source, staging resources, or release packages. Installation writes only the selected ID/channel to readable SD configuration separately from the generic app.
 
@@ -240,8 +240,8 @@ The initial 0.4.0 controller builds passed both SDK builds and import checks (49
 
 | Controller build | SHA-256 |
 |---|---|
-| API 87.1 / official 1.4.3 | `d9f9f2041da8b215b1477f17b85871b31be6a714cd7efb65a5abea7899a00c41` |
-| API 88.9 | `3d080a233127a6e81b39bd506702c7585d175812153ec3540f5994c34f9b2de3` |
+| API 87.1 / official 1.4.3 | `fe664ceb8c4a63ce2de5c1292941a4a153e7c88b61b10e09fbad68472cb9574e` |
+| API 88.9 | `4c38ac33329a6617cd24e6603093707b59bfb2abd685d4e50b333f8b90021197` |
 
 The 0.4.0 software checks passed 292 Python tests with warnings treated as errors and strict native C controller/encoder tests. A local adapter harness also exercised input, stop priority, finite transmission, storage bounds and cleanup with simulated hardware. These checks do not substitute for a physical controller test.
 
