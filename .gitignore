@@ -1,6 +1,7 @@
 # Local device identity and personal settings
 .local/
 *.dpapi
+target.conf
 .env
 .env.*
 !.env.example

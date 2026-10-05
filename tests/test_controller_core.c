@@ -5,7 +5,7 @@
 static uint32_t seq;
 static ControllerAction input(ControllerState *s, ControllerKey k, ControllerInputType t,
                               uint32_t now) {
-    if (t == ControllerInputPress || (t == ControllerInputRepeat && k != ControllerKeyOk))
+    if (t == ControllerInputPress)
         seq++;
     ControllerInput i = {k, t, true, seq, now};
     return controller_input(s, i, now);
@@ -108,21 +108,33 @@ int main(void) {
     input(&s, ControllerKeyRight, ControllerInputPress, 1002);
     assert(!s.armed && s.mode == 'v');
     s.selection = ControllerSelectionIntensity;
+    /* A physical hold emits Press then Repeat events sharing its cycle counter. */
+    assert(input(&s, ControllerKeyRight, ControllerInputPress, 1099) == 0);
+    assert(s.intensity == 1);
     for (unsigned n = 0; n < 110; n++)
-        input(&s, ControllerKeyRight, ControllerInputRepeat, 1100 + n);
+        assert(input(&s, ControllerKeyRight, ControllerInputRepeat, 1100 + n) == 0);
     assert(s.intensity == 100);
+    assert(input(&s, ControllerKeyLeft, ControllerInputPress, 1299) == 0);
+    assert(s.intensity == 99);
     for (unsigned n = 0; n < 110; n++)
-        input(&s, ControllerKeyLeft, ControllerInputRepeat, 1300 + n);
+        assert(input(&s, ControllerKeyLeft, ControllerInputRepeat, 1300 + n) == 0);
     assert(s.intensity == 0);
     s.selection = ControllerSelectionDuration;
+    assert(input(&s, ControllerKeyRight, ControllerInputPress, 1499) == 0);
+    assert(s.duration_ms == 600);
     for (unsigned n = 0; n < 110; n++)
-        input(&s, ControllerKeyRight, ControllerInputRepeat, 1500 + n);
+        assert(input(&s, ControllerKeyRight, ControllerInputRepeat, 1500 + n) == 0);
     assert(s.duration_ms == 10000);
+    assert(input(&s, ControllerKeyLeft, ControllerInputPress, 1699) == 0);
+    assert(s.duration_ms == 9900);
     for (unsigned n = 0; n < 110; n++)
-        input(&s, ControllerKeyLeft, ControllerInputRepeat, 1700 + n);
+        assert(input(&s, ControllerKeyLeft, ControllerInputRepeat, 1700 + n) == 0);
     assert(s.duration_ms == 100);
     arm(&s, 2000);
-    assert(input(&s, ControllerKeyOk, ControllerInputPress, 3002) ==
+    for (unsigned n = 0; n < 20; n++)
+        assert(input(&s, ControllerKeyOk, ControllerInputRepeat, 3001 + n) == 0);
+    assert(s.phase == ControllerPhaseIdle && s.armed);
+    assert(input(&s, ControllerKeyOk, ControllerInputPress, 3022) ==
            ControllerActionStartOperation);
     assert(controller_tx_failed(&s) == ControllerActionHalt);
     assert(!s.armed);
