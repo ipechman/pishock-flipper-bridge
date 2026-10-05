@@ -6,7 +6,7 @@ You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with
 
 # Install the desktop application
 
-Download PiShockBridge-Setup-0.3.1.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
+Download PiShockBridge-Setup-0.3.2.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
 
 You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
 
@@ -14,9 +14,9 @@ Dark mode is the default. To change it, choose Dark or Light under Appearance in
 
 Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
 
-# Updating from version 0.3
+# Updating from version 0.3 or 0.3.1
 
-Choose Exit from the desktop app's tray menu, then install version 0.3.1. Your saved profile is preserved. Keep the existing version 0.3 PiShock USB Radio add-on: this desktop update requires no add-on reinstall or Flipper firmware change.
+Choose Exit from the desktop app's tray menu, then install version 0.3.2. Your saved profile is preserved. Keep the existing version 0.3 PiShock USB Radio add-on: this desktop update requires no add-on reinstall or Flipper firmware change. Version 0.3.2 adds a direct USB beep diagnostic under Troubleshoot.
 
 Version 0.3.1 fixes an immediate connection failure by completing PiShock registration before opening the cloud command connections. Registration can close connections that are already open. The [change notes](../CHANGELOG.md) document the fix and planned renewal behavior.
 
@@ -158,6 +158,25 @@ A pause, sharing-permission change, or other configuration update can make the d
 
 # Troubleshooting
 
+## Direct beep test
+
+This diagnostic bypasses the website and cloud connection. It uses the same saved shocker ID and channel as the bridge. Preparing it only configures USB; a beep is sent only when you click the beep button.
+
+1. Stop and disconnect the normal bridge. Unplug the original hub and close other programs using the Flipper.
+2. Keep the powered shocker off your body near the Flipper. Open PiShock USB Radio on the Flipper.
+3. Open Troubleshoot, choose Find Flipper, select the radio interface, then choose Prepare USB test.
+4. Press OK on the Flipper to arm it, then choose Send one 0.5-second beep.
+5. Listen for the shocker's response. An accepted USB command confirms transmitter startup, not reception.
+6. Choose Stop test before returning to Connection and reconnecting the normal bridge. Arm again on the Flipper before sending a fresh website command.
+
+The test has no shock or positive-vibration controls, automatic retransmission, or RF keep-awake. Rapid extra clicks are ignored while a beep is pending or the brief cooldown is active. A disarmed rejection is not replayed after you arm. Back on the Flipper remains the immediate stop control; Stop test and Exit also stop and disarm. Closing the desktop window keeps the current session in the tray, so use Stop test or Exit when finished.
+
+### If USB accepts the beep but the receiver is silent
+
+Power the receiver off and back on and confirm its power-on indication. Check the selected target, distance, charge, and pairing. Importing a hub profile copies its settings; it does not put the physical receiver into pairing mode.
+
+For a SmallOne pairing check, keep the original hub unplugged and prepare the direct test first. With the receiver powered on, hold its power button for about three seconds to enter its ten-second pairing window, then click the direct beep button once. Successful pairing produces an audible/physical confirmation. Try another beep afterward in normal mode, then stop the test and check a website beep through the bridge. This direct-beep pairing sequence restored reception in the project's physical troubleshooting test. PiShock's [official pairing instructions](https://docs.pishock.com/faqs.html) describe the receiver's pairing window and use a vibration command from the original hub.
+
 ## The Flipper is not found
 
 For installation, close the app on the Flipper and choose Find Flipper in Set up devices. For a normal connection, open PiShock USB Radio first and choose Find Flipper in Connection. These steps use different USB interfaces.
@@ -183,6 +202,8 @@ Open PiShock USB Radio, choose Find Flipper and Connect on the computer, and wai
 Check that the shocker is still powered on, the selected target is correct, and the Flipper says it is armed. Keep the shocker in range and the original hub unplugged. Reconnect and send a fresh short beep if needed.
 
 Beep-only test deliberately ignores shock and vibration. To change modes, disconnect first.
+
+Use the separate Direct beep test above to distinguish the USB/radio path from website forwarding. Neither a bridge log entry nor the Flipper's Transmitting label confirms receiver delivery.
 
 ## The Flipper reports DISARMED, LIMIT, or BUSY
 

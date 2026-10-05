@@ -7,19 +7,21 @@ from pathlib import Path
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from types import SimpleNamespace
 import webbrowser
 
 import desktop_service as service
+import direct_test
 import flipper_install as installer
 import desktop_tray
 from desktop_paths import AlreadyRunningError, InstanceLock, preferences_path, profile_path, resource_root
 from desktop_theme import Appearance, load_preference, save_preference
 
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 INSPIRATION_URL = 'https://github.com/Droski1/PiShock-Unofficial-Documentation'
 
 
@@ -76,6 +78,45 @@ class DemoSession:
         return tuple(events)
 
 
+class DemoDirectSession(DemoSession):
+    """Preview preparation, click gating and cooldown without any device access."""
+    def __init__(self):
+        super().__init__()
+        self._ready = False
+        self._ready_at = None
+
+    @property
+    def can_beep(self):
+        return self.running and self._ready
+
+    def start(self, identity, port):
+        self.running = True
+        self._ready = True
+        self.events.append(SimpleNamespace(kind='direct_ready', message='Demo USB test prepared.'))
+
+    def request_beep(self):
+        if not self.can_beep:
+            return False
+        self._ready = False
+        self._ready_at = time.monotonic() + 1.0
+        self.events.extend((SimpleNamespace(kind='direct_busy', message='Demo beep requested.'),
+                            SimpleNamespace(kind='status', message='Demo: beep accepted over USB. '
+                                            'Only hearing the receiver confirms delivery.')))
+        return True
+
+    def request_stop(self):
+        self._ready = False
+        self._ready_at = None
+        super().request_stop()
+
+    def drain_events(self):
+        if self.running and self._ready_at is not None and time.monotonic() >= self._ready_at:
+            self._ready_at = None
+            self._ready = True
+            self.events.append(SimpleNamespace(kind='direct_ready', message='Demo cooldown complete.'))
+        return super().drain_events()
+
+
 class BridgeApp(tk.Tk):
     def __init__(self, *, demo=False, first_run=False):
         super().__init__()
@@ -94,6 +135,10 @@ class BridgeApp(tk.Tk):
         self.profile = None
         self.destination = None if demo else profile_path()
         self.session = DemoSession() if demo else service.BridgeSession()
+        self.session_kind = 'bridge'
+        self._direct_blocked_by_bridge = False
+        self.session_stopping = False
+        self.direct_ready = False
         self.tray = None
         self.hidden_to_tray = False
         self.jobs = queue.Queue()
@@ -112,6 +157,10 @@ class BridgeApp(tk.Tk):
         self.status_text = tk.StringVar(value='Not connected')
         self.detail_text = tk.StringVar(value='Set up your devices, then start a connection.')
         self.target_text = tk.StringVar(value='No device saved')
+        self.radio_selection = tk.StringVar()
+        self.direct_status = tk.StringVar(value='USB test stopped')
+        self.direct_detail = tk.StringVar(value='Use a saved device and select your Flipper to prepare a test.')
+        self.direct_target = tk.StringVar(value='No saved device')
         self.beep_only = tk.BooleanVar(value=True)
         self.task_text = tk.StringVar(value='Ready when you are.')
         self.install_text = tk.StringVar(value='Bundled add-ons support API 87.1 (official 1.4.3) and API 88.9 on hardware f7.')
@@ -120,6 +169,7 @@ class BridgeApp(tk.Tk):
         self._shell()
         self._connection_page()
         self._setup_page()
+        self._troubleshoot_page()
         self._help_page()
         self.protocol('WM_DELETE_WINDOW', self.close_app)
         if demo and not first_run:
@@ -173,7 +223,8 @@ class BridgeApp(tk.Tk):
         self._label(sidebar, 'PiShock\nBridge', size=22, bold=True, color='white', bg='navy').pack(anchor='w', padx=24)
         self._label(sidebar, 'FLIPPER + USB', size=9, color='nav_muted', bg='navy').pack(anchor='w', padx=24, pady=(10, 35))
         self.nav = {}
-        for name, text in [('connection', 'Connection'), ('setup', 'Set up devices'), ('help', 'Help & about')]:
+        for name, text in [('connection', 'Connection'), ('setup', 'Set up devices'),
+                           ('troubleshoot', 'Troubleshoot'), ('help', 'Help & about')]:
             button = tk.Button(sidebar, text=text, anchor='w', padx=18, pady=12,
                                font=('Segoe UI Semibold', 11), bd=0, cursor='hand2',
                                command=lambda value=name: self.show_page(value))
@@ -209,7 +260,7 @@ class BridgeApp(tk.Tk):
         self.container.grid_rowconfigure(0, weight=1)
         self.pages = {}
         self.page_hosts = {}
-        for name in ('connection', 'setup', 'help'):
+        for name in ('connection', 'setup', 'troubleshoot', 'help'):
             host = ScrollPage(self.container, self.appearance)
             host.grid(row=0, column=0, sticky='nsew')
             self.page_hosts[name] = host
@@ -257,7 +308,7 @@ class BridgeApp(tk.Tk):
         self._label(card, textvariable=self.detail_text, color='muted', wraplength=705).pack(anchor='w', pady=(0, 16))
         row = self._frame(card, bg='card')
         row.pack(fill='x')
-        self.radio_combo = ttk.Combobox(row, state='readonly', width=29)
+        self.radio_combo = ttk.Combobox(row, state='readonly', width=29, textvariable=self.radio_selection)
         self.radio_combo.pack(side='left', fill='x', expand=True, padx=(0, 10))
         self._button(row, 'Find Flipper', self.refresh_radio).pack(side='left')
         self.mode_toggle = ttk.Checkbutton(card, text='Beep-only test  ·  ignore shock and vibration', variable=self.beep_only)
@@ -318,6 +369,44 @@ class BridgeApp(tk.Tk):
                     color='muted', wraplength=710).pack(anchor='w', pady=(6, 10))
         self._button(bottom, 'Go to connection', lambda: self.show_page('connection')).pack(anchor='w')
 
+    def _troubleshoot_page(self):
+        page = self.pages['troubleshoot']
+        self._heading(page, 'Try one direct beep.',
+                      'Test the saved receiver through USB and your Flipper, without a PiShock website connection.')
+        card = self._card(page, pady=14)
+        self._label(card, textvariable=self.direct_status, size=11, bold=True, color='accent').pack(anchor='w')
+        self._label(card, textvariable=self.direct_target, size=18, bold=True).pack(anchor='w', pady=(12, 8))
+        self._label(card, textvariable=self.direct_detail, color='muted', wraplength=705).pack(anchor='w', pady=(0, 14))
+        row = self._frame(card)
+        row.pack(fill='x')
+        self.direct_radio_combo = ttk.Combobox(row, state='readonly', width=29, textvariable=self.radio_selection)
+        self.direct_radio_combo.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        self._button(row, 'Find Flipper', self.refresh_radio).pack(side='left')
+        actions = self._frame(card)
+        actions.pack(fill='x', pady=(14, 0))
+        self.prepare_button = self._button(actions, 'Prepare USB test', self.prepare_direct, tracked=False)
+        self.prepare_button.pack(side='left', padx=(0, 8))
+        self.beep_button = self._button(actions, 'Send one 0.5-second beep', self.send_direct_beep,
+                                        primary=True, tracked=False)
+        self.beep_button.pack(side='left', padx=(0, 8))
+        self.direct_stop_button = ttk.Button(actions, text='Stop test', command=self.stop, style='Stop.TButton')
+        self.direct_stop_button.pack(side='left')
+        guide = self._card(page)
+        self._label(guide, 'Prepare, arm, then press Beep', size=13, bold=True).pack(anchor='w')
+        self._label(guide, '1   Disconnect the normal bridge and unplug the original hub.\n'
+                    '2   Open the current PiShock USB Radio app on the Flipper. Find it above and prepare the USB test.\n'
+                    '3   Press OK on the Flipper to arm, then press the beep button here. Back stops and disarms.',
+                    color='muted', wraplength=705).pack(anchor='w', pady=(8, 14))
+        self._label(guide, 'Pairing a silent receiver', bold=True).pack(anchor='w')
+        self._label(guide, 'Keep the receiver off-body. Hold its power button for about 3 seconds to enter pairing, '
+                    'then send the beep within the roughly 10-second pairing window. '
+                    'This pairing method has been confirmed to work.',
+                    color='muted', wraplength=705).pack(anchor='w', pady=(6, 12))
+        self._label(guide, 'USB acceptance does not confirm receiver delivery. Only hearing the beep does. '
+                    'Each click requests one beep; allow the short cooldown before another. '
+                    'Keep the computer awake during the test.',
+                    size=9, color='muted', wraplength=705).pack(anchor='w')
+
     def _help_page(self):
         page = self.pages['help']
         self._heading(page, 'Help, without the guesswork.', 'A quick reference for everyday use, with your full guide one click away.')
@@ -326,6 +415,7 @@ class BridgeApp(tk.Tk):
             ('Keep it near the clock', 'X hides this window while the bridge keeps running. Use its icon near the clock to reopen it, stop and disconnect, or Exit. Exit stops output before closing.'),
             ('Connect each session', 'Open the Flipper app, choose Find Flipper, then Connect. Once connected, press OK on the Flipper to arm.'),
             ('If a beep is silent', 'Check shocker power, target, pairing and distance. The app can confirm the Flipper accepted a command; only hearing it confirms delivery.'),
+            ('Test without the website', 'Stop the normal connection, then use Troubleshoot to prepare a USB test. Physically arm the Flipper and send one 0.5-second beep.'),
             ('If the connection stops', 'Check USB, internet and the computer’s sleep state. Connect again, physically re-arm and send a fresh command. Commands are never replayed.'),
             ('Keep your profile private', 'Your identity is encrypted for your Windows account and stored in your local application data. Share source and installers, never device.dpapi or raw hub responses.'),
         ]:
@@ -352,20 +442,41 @@ class BridgeApp(tk.Tk):
         if self.profile:
             self.target_text.set(f'Hub {self.profile.hub_id}  /  Shocker {self.profile.shocker_id}')
             self.detail_text.set('Open PiShock USB Radio on your Flipper, find it below, then connect.')
+            self.direct_target.set(f'Hub {self.profile.hub_id}  /  Shocker {self.profile.shocker_id}  /  Channel {self.profile.channel}')
+            self.direct_detail.set('Open the current PiShock USB Radio app, select your Flipper, then prepare the USB test.')
         else:
             self.target_text.set('Let’s set up your devices')
             self.detail_text.set('Use Set up devices to install the add-on and save your hub.')
+            self.direct_target.set('No saved device')
+            self.direct_detail.set('A saved device is required. Use Set up devices first.')
         self._update_controls()
 
     def _update_controls(self):
         locked = self.busy or self.session.running or self.closing or self._interface_failed
         for button in self.controls:
             button.configure(state='disabled' if locked else 'normal')
-        for combo in (self.radio_combo, self.console_combo, self.hub_combo, self.shocker_combo):
+        for combo in (self.radio_combo, self.direct_radio_combo, self.console_combo, self.hub_combo, self.shocker_combo):
             combo.configure(state='disabled' if locked else 'readonly')
         self.mode_toggle.configure(state='disabled' if locked else 'normal')
         self.connect_button.configure(state='normal' if self.profile and not locked else 'disabled')
         self.stop_button.configure(state='normal' if self.session.running and not self.closing else 'disabled')
+        selected = 0 <= self.direct_radio_combo.current() < len(self.radio_ports)
+        self.prepare_button.configure(state='normal' if self.profile and selected and not locked else 'disabled')
+        direct_active = self.session_kind == 'direct' and self.session.running
+        can_beep = (direct_active and self.direct_ready and not self.session_stopping and
+                    not self.closing and not self._interface_failed and self.session.can_beep)
+        self.beep_button.configure(state='normal' if can_beep else 'disabled')
+        self.direct_stop_button.configure(state='normal' if direct_active and not self.closing else 'disabled')
+        if self.session_kind == 'bridge' and self.session.running:
+            self._direct_blocked_by_bridge = True
+            self.direct_status.set('Disconnect the bridge first')
+            self.direct_detail.set('Use Stop & disconnect on Connection before preparing a USB test.')
+        elif self._direct_blocked_by_bridge:
+            self._direct_blocked_by_bridge = False
+            if self.session_kind == 'bridge':
+                self.direct_status.set('Check the Flipper' if self.last_problem else 'USB test stopped')
+                self.direct_detail.set(self.last_problem[1] if self.last_problem else
+                                       'Select your Flipper, then prepare the USB test when ready.')
 
     def _background(self, label, action, done):
         if self.busy or self.session.running or self.closing or self._interface_failed:
@@ -401,6 +512,7 @@ class BridgeApp(tk.Tk):
         def done(inventory):
             self.radio_ports = inventory.flippers
             self._fill(self.radio_combo, inventory.flippers)
+            self._fill(self.direct_radio_combo, inventory.flippers)
             self.task_text.set('Flipper found. Connect when ready.' if inventory.flippers else
                                'No Flipper radio app found. Open PiShock USB Radio on the device, then try again.')
         self._background('Looking for the Flipper radio app…', self._inventory, done)
@@ -482,6 +594,8 @@ class BridgeApp(tk.Tk):
             'Replace saved device?', 'Replace the device saved in this desktop app? Your original hub and CLI profile will stay unchanged.', parent=self)
 
     def save_device(self):
+        if self.busy or self.session.running or self.closing or self._interface_failed:
+            return
         index = self.shocker_combo.current()
         if self.discovery is None or not 0 <= index < len(self.discovery.shockers):
             self.task_text.set('Read your hub’s paired devices and choose one first.')
@@ -497,6 +611,8 @@ class BridgeApp(tk.Tk):
         self._background('Saving your selected device securely on this computer…', action, self._saved)
 
     def import_existing(self):
+        if self.busy or self.session.running or self.closing or self._interface_failed:
+            return
         if self.demo:
             self.task_text.set('Demo mode does not read profiles. Use Import your hub to preview setup.')
             return
@@ -527,6 +643,11 @@ class BridgeApp(tk.Tk):
             return
         try:
             self.last_problem = None
+            if self.session_kind != 'bridge':
+                self.session = DemoSession() if self.demo else service.BridgeSession()
+                self.session_kind = 'bridge'
+            self.session_stopping = False
+            self.direct_ready = False
             self.session.start(self.profile, ports[index].device, beep_only=self.beep_only.get())
         except Exception:
             self.task_text.set('The connection could not start. Check the device selection and try again.')
@@ -535,15 +656,67 @@ class BridgeApp(tk.Tk):
         self.detail_text.set('Connecting to PiShock. Keep the original hub unplugged.')
         self._update_controls()
 
+    def prepare_direct(self):
+        if self.busy or self.session.running or self.closing or self._interface_failed:
+            self._update_controls()
+            return
+        if not self.profile:
+            self.direct_detail.set('A saved device is required. Use Set up devices first.')
+            return
+        index = self.direct_radio_combo.current()
+        if not 0 <= index < len(self.radio_ports):
+            self.direct_detail.set('Open PiShock USB Radio on your Flipper, then choose Find Flipper.')
+            return
+        try:
+            self.session = DemoDirectSession() if self.demo else direct_test.DirectBeepSession()
+            self.session_kind = 'direct'
+            self.session_stopping = False
+            self.direct_ready = False
+            self.last_problem = None
+            self.session.start(self.profile, self.radio_ports[index].device)
+        except Exception:
+            self.direct_status.set('USB test could not start')
+            self.direct_detail.set('Check the Flipper selection and USB cable, then prepare the test again.')
+            self._update_controls()
+            return
+        self.direct_status.set('Preparing USB test…')
+        self.direct_detail.set('Preparing the saved receiver. No beep is sent until you press the beep button.')
+        self.status_text.set('USB test in progress')
+        self.detail_text.set('Use Troubleshoot to send a beep or stop the test before connecting to PiShock.')
+        self._update_controls()
+
+    def send_direct_beep(self):
+        if self.closing or self._interface_failed or self.session_kind != 'direct' or self.session_stopping:
+            return
+        if not self.direct_ready or not self.session.running or not self.session.can_beep:
+            return
+        self.direct_ready = False
+        if self.session.request_beep():
+            self.direct_status.set('Beep requested…')
+            self.direct_detail.set('Waiting for the Flipper. A new click is required for every beep.')
+        else:
+            self.direct_detail.set('The USB test is not ready for another beep. Wait for readiness, or prepare it again.')
+        self._update_controls()
+
     def stop(self):
         if not self.session.running:
             return
+        self.session_stopping = True
+        self.direct_ready = False
         self.session.request_stop()
+        if self.session_kind == 'direct':
+            self.direct_status.set('Stopping USB test…')
+            self.direct_detail.set('Stopping output and disconnecting. You can always press Back on the Flipper.')
         self.status_text.set('Stopping…')
         self.detail_text.set('Stopping output and disconnecting. You can always press Back on the Flipper.')
         self._update_controls()
 
     def _event(self, event):
+        if self.closing:
+            return
+        if self.session_kind == 'direct':
+            self._direct_event(event)
+            return
         kind = event.kind
         if self.last_problem and self.last_problem[0] == 'warning' and kind in ('error', 'failure'):
             return  # Preserve the explicit physical-stop instruction through teardown.
@@ -576,6 +749,46 @@ class BridgeApp(tk.Tk):
             else:
                 self.status_text.set('Not connected')
                 self.detail_text.set('Connect again when ready. Arming always happens on the Flipper.')
+        if event.message and not (kind == 'stopped' and self.last_problem):
+            self.task_text.set(event.message)
+
+    def _direct_event(self, event):
+        kind = event.kind
+        if self.session_stopping and kind in ('direct_ready', 'direct_busy', 'status'):
+            return
+        if self.last_problem and self.last_problem[0] == 'warning' and kind in ('error', 'failure'):
+            return
+        if kind == 'direct_ready':
+            if self.session_stopping or self.last_problem or not self.session.running:
+                return
+            self.direct_ready = True
+            self.direct_status.set('USB test ready · check Flipper')
+            self.direct_detail.set('Press OK on the Flipper to arm, then send one 0.5-second beep. '
+                                   'Readiness does not confirm arming or receiver delivery.')
+        elif kind == 'direct_busy':
+            self.direct_ready = False
+            self.direct_status.set('Beep requested · cooling down')
+        elif kind == 'status':
+            self.direct_detail.set(event.message)
+        elif kind in ('error', 'failure', 'warning', 'stop_unconfirmed'):
+            self.direct_ready = False
+            self.session_stopping = True
+            warning = kind in ('warning', 'stop_unconfirmed')
+            self.last_problem = ('warning' if warning else 'error', event.message)
+            self.direct_status.set('Check the Flipper' if warning else 'USB test ended')
+            self.direct_detail.set(event.message)
+        elif kind == 'stopping':
+            self.direct_ready = False
+            self.session_stopping = True
+            self.direct_status.set('Stopping USB test…')
+        elif kind == 'stopped':
+            self.direct_ready = False
+            self.session_stopping = True
+            self.direct_status.set('USB test stopped · check Flipper' if self.last_problem else 'USB test stopped')
+            self.direct_detail.set(self.last_problem[1] if self.last_problem else
+                                   'Prepare again for another USB test, or return to Connection and connect normally.')
+            self.status_text.set('Not connected')
+            self.detail_text.set('The USB test has ended. Connect again when ready.')
         if event.message and not (kind == 'stopped' and self.last_problem):
             self.task_text.set(event.message)
 

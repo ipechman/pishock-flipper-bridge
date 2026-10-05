@@ -5,7 +5,7 @@
   #error OutputDir must name the release output directory.
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.1"
+  #define AppVersion "0.3.2"
 #endif
 
 [Setup]

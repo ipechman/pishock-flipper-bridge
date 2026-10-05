@@ -64,6 +64,7 @@ class DesktopAppTests(unittest.TestCase):
         for owner, names in (
                 (desktop.service, ("enumerate_ports", "load_profile", "import_profile",
                                    "import_saved_profile", "BridgeSession")),
+                (desktop.direct_test, ("DirectBeepSession",)),
                 (desktop.installer, ("discover_console_ports", "install_app")),
                 (desktop.webbrowser, ("open",)),
                 (desktop.desktop_tray, ("TrayIcon",)),
@@ -193,6 +194,207 @@ class DesktopAppTests(unittest.TestCase):
         self.app.connect()
         self.assertFalse(self.app.session.running)
         self.assertIn("Find Flipper", self.app.task_text.get())
+
+    def test_direct_test_requires_saved_profile_and_selected_radio(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.app.prepare_direct()
+        self.assertFalse(self.app.session.running)
+        self.assertTrue(self.app.prepare_button.instate(['disabled']))
+        self.assertIn('saved', self.app.direct_detail.get().lower())
+        self.fill_profile()
+        self.app.prepare_direct()
+        self.assertFalse(self.app.session.running)
+        self.assertIn('Find Flipper', self.app.direct_detail.get())
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.run_step(self.app.refresh_radio)
+        self.assertEqual(self.app.direct_radio_combo.get(), self.app.radio_combo.get())
+        self.assertTrue(self.app.prepare_button.instate(['!disabled']))
+        self.assertIn('1234', self.app.direct_target.get())
+        self.assertIn('0', self.app.direct_target.get())
+
+    def test_prepare_waits_for_readiness_and_click_waits_for_cooldown(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.assertTrue(self.app.session.running)
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        self.assertIn('OK', self.app.direct_detail.get())
+        self.assertNotIn('accepted', self.app.direct_detail.get().lower())
+        self.app.send_direct_beep()
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.assertFalse(self.app.session.can_beep)
+        self.until(lambda: 'accepted over USB' in self.app.direct_detail.get())
+        self.assertIn('Only hearing', self.app.direct_detail.get())
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        self.app.stop()
+        self.until(lambda: not self.app.session.running)
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+
+    def test_prepare_cannot_replace_or_stop_a_running_normal_session(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        controller = self.app.session
+        self.app.show_page('troubleshoot')
+        self.app.prepare_direct()
+        self.assertIs(self.app.session, controller)
+        self.assertTrue(controller.running)
+        self.assertTrue(self.app.prepare_button.instate(['disabled']))
+        self.assertIn('disconnect', self.app.direct_detail.get().lower())
+
+    def test_normal_disconnect_clears_troubleshooting_blocked_guidance(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        self.app.show_page('troubleshoot')
+        self.assertIn('disconnect', self.app.direct_detail.get().lower())
+        self.app.stop()
+        self.until(lambda: self.app.status_text.get() == 'Not connected')
+        self.assertTrue(self.app.prepare_button.instate(['!disabled']))
+        self.assertNotIn('disconnect', self.app.direct_status.get().lower())
+        self.assertNotIn('disconnect', self.app.direct_detail.get().lower())
+        self.assertIn('prepare', self.app.direct_detail.get().lower())
+
+    def test_direct_result_and_stop_warning_survive_idle_control_updates(self):
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        self.app.send_direct_beep()
+        self.until(lambda: 'accepted over USB' in self.app.direct_detail.get())
+        accepted = self.app.direct_detail.get()
+        self.app._update_controls()
+        self.assertEqual(self.app.direct_detail.get(), accepted)
+        message = 'Stop acknowledgment unavailable. Press Back on the Flipper.'
+        self.app._event(event('warning', message))
+        self.app.stop()
+        self.until(lambda: self.app.direct_status.get().startswith('USB test stopped'))
+        self.app._update_controls()
+        self.assertEqual(self.app.direct_detail.get(), message)
+
+    def test_direct_session_blocks_setup_and_normal_until_stopped_then_returns_to_normal(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        controller = self.app.session
+        self.app.connect()
+        self.app.refresh_consoles()
+        self.app.install_flipper()
+        self.app.refresh_hubs()
+        self.app.save_device()
+        self.app.import_existing()
+        self.assertIs(self.app.session, controller)
+        self.assertTrue(controller.running)
+        self.assertFalse(self.app.busy)
+        self.assertEqual(self.app.hub_ports, [])
+        self.assertEqual(self.app.console_ports, [])
+        self.assertTrue(all(button.instate(['disabled']) for button in self.app.controls))
+        self.confirm.assert_not_called()
+        self.picker.assert_not_called()
+        self.app.stop()
+        self.until(lambda: not self.app.session.running)
+        self.app.connect()
+        self.until(lambda: self.app.status_text.get().startswith('Connected'))
+        self.assertIsNot(self.app.session, controller)
+        self.assertEqual(self.app.session_kind, 'bridge')
+        self.assertIn('website', self.app.detail_text.get())
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+
+    def test_pending_stop_and_stale_ready_cannot_enable_another_beep(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        controller = self.app.session
+        # The worker can still be cleaning up after Stop returns.
+        with patch.object(controller, 'request_stop'):
+            self.app.stop()
+        stopping = self.app.direct_status.get(), self.app.direct_detail.get()
+        controller.events.extend((event('direct_ready'), event('direct_busy'), event('status', 'Late acceptance')))
+        self.until(lambda: not controller.events)
+        self.assertEqual((self.app.direct_status.get(), self.app.direct_detail.get()), stopping)
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.app.connect()
+        self.app.prepare_direct()
+        self.assertIs(self.app.session, controller)
+        self.assertTrue(self.app.prepare_button.instate(['disabled']))
+
+    def test_late_direct_readiness_after_exit_is_discarded(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        with patch.object(self.app.session, 'request_stop'), patch.object(self.app, 'destroy'):
+            self.app.exit_app()
+            message = self.app.task_text.get()
+            self.app.session.events.extend((event('direct_ready'), event('status', 'Late acceptance')))
+            self.until(lambda: not self.app.session.events)
+            self.assertEqual(self.app.task_text.get(), message)
+            self.assertTrue(self.app.beep_button.instate(['disabled']))
+            self.app.send_direct_beep()
+            self.assertEqual(self.app.task_text.get(), message)
+
+    def test_direct_request_declined_during_state_change_is_handled(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        with patch.object(self.app.session, 'request_beep', return_value=False):
+            self.app.send_direct_beep()
+        self.assertIn('ready', self.app.direct_detail.get().lower())
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.assertFalse(self.app._interface_failed)
+
+    def test_direct_stop_warning_survives_stopped_and_generic_error(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        message = 'Stop acknowledgment unavailable. Press Back on the Flipper.'
+        self.app._event(event('warning', message))
+        self.app._event(event('error', 'Generic error'))
+        self.app._event(event('stopped'))
+        self.app._update_controls()
+        self.assertEqual(self.app.direct_detail.get(), message)
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+
+    def test_direct_test_tray_hide_stop_and_theme_keep_session_state(self):
+        self.assertIn('troubleshoot', self.app.pages)
+        self.fill_profile()
+        self.run_step(self.app.refresh_radio)
+        self.app.prepare_direct()
+        self.until(lambda: self.app.beep_button.instate(['!disabled']))
+        self.app.show_page('troubleshoot')
+        controller = self.app.session
+        for name in ('Light', 'Dark'):
+            self.app.theme_choice.set(name)
+            self.app._appearance_changed()
+            self.app.update_idletasks()
+            self.assertEqual(self.app.pages['troubleshoot'].cget('background'),
+                             appearance.PALETTES[name.lower()]['bg'])
+            self.assertTrue(self.app.beep_button.instate(['!disabled']))
+            self.assertEqual(self.app.current_page, 'troubleshoot')
+            self.assertIs(self.app.session, controller)
+        tray = self.fake_tray()
+        self.app.close_app()
+        self.assertTrue(controller.running)
+        self.assertTrue(self.app.hidden_to_tray)
+        tray.events.append('stop')
+        self.until(lambda: not controller.running)
+        self.assertTrue(self.app.beep_button.instate(['disabled']))
+        self.assertFalse(self.app.closing)
 
     def test_error_survives_stopped_and_new_connect_clears_it(self):
         message = "Synthetic connection failure. Check the USB cable."

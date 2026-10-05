@@ -1,5 +1,15 @@
 # Change notes
 
+## 0.3.2 — 2026-10-05
+
+- Added a Troubleshoot page with a direct USB beep test using the saved selected target. Each explicit click requests one 0.5-second beep; the diagnostic works without the PiShock website or internet.
+- Physical arming is still required. There are no shock or positive-vibration controls, automatic retries, queued repeats, or automatic RF keep-awake in the diagnostic.
+- The normal bridge and direct test share one USB session slot. Stop the current session before switching; Stop test, tray Stop, and Exit stop/disarm and release USB.
+- Added receiver-pairing troubleshooting and clarified that USB acceptance/Transmitting does not confirm radio reception. Re-pairing restored direct and website beeps during physical troubleshooting of the prior release.
+- Existing saved profiles and the 0.3 Flipper add-on remain usable. No firmware change or add-on reinstall is needed for this desktop feature.
+
+The separate standalone controller's implementation plan is under review; its Flipper app is not included in this release.
+
 ## 0.3.1 — 2026-10-05
 
 ### Connection fix

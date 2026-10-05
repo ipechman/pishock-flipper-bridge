@@ -8,7 +8,7 @@ Set up devices with buttons, choose a paired shocker, and connect. The original 
 
 ## Get started
 
-Download **PiShockBridge-Setup-0.3.1.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
+Download **PiShockBridge-Setup-0.3.2.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
 
 1. In **Set up devices**, find the Flipper and choose **Install app**.
 2. Connect your original hub, choose **Find hub**, then **Read paired devices**.
@@ -18,7 +18,7 @@ Download **PiShockBridge-Setup-0.3.1.exe** from [Releases](https://github.com/ip
 
 Already using the original version? Keep your working Flipper app and choose **Use an existing CLI profile…** to import its encrypted profile.
 
-**Updating from 0.3?** Exit the desktop app from its tray menu and install 0.3.1. Your saved profile and existing 0.3 Flipper add-on can stay in place; this update requires no add-on reinstall or firmware change.
+**Updating from 0.3 or 0.3.1?** Exit the desktop app from its tray menu and install 0.3.2. Your saved profile and existing 0.3 Flipper add-on can stay in place; this update requires no add-on reinstall or firmware change.
 
 **Updating from 0.2?** Exit the old desktop app, install this update, then use **Set up devices → Install app** to update the Flipper add-on too. Your saved profile is preserved. The new add-on is required for keep-awake and the simplified armed/disarmed controls.
 
@@ -27,6 +27,8 @@ The desktop app opens in dark mode by default. Choose **Dark** or **Light** unde
 Closing the window keeps the bridge running in the **system tray near the clock**. Use the tray icon to reopen it, **Stop & disconnect**, or **Exit** completely.
 
 The [full user guide](docs/USER_GUIDE.md) covers setup, migration, everyday controls, and troubleshooting. It is also available in **Help & about** inside the app.
+
+**Troubleshoot → Direct beep test** sends one half-second beep directly over USB when clicked, using your saved target. It works without PiShock's website or internet, making it useful for checking reception and receiver pairing. Stop the normal bridge before preparing the test, then physically arm the Flipper. The diagnostic cannot send shock or positive vibration and does not enable automatic keep-awake.
 
 Version 0.3.1 completes PiShock registration before opening the cloud command connections, fixing an immediate disconnect caused by registration closing existing connections. Planned renewal, typically every 30 seconds, briefly pauses command forwarding and discards pending commands. An unchanged policy preserves the Flipper's existing armed or disarmed state. See the [change notes](CHANGELOG.md) for renewal behavior and protocol limits.
 

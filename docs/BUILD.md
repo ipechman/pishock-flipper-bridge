@@ -11,6 +11,8 @@ to build the desktop application, run tests, or rebuild the Flipper add-on.
   guided setup, appearance, and the native Windows tray icon.
 - `host/desktop_service.py`, `desktop_paths.py`, and `flipper_install.py`: desktop
   coordination, private settings, and installation of the Flipper add-on.
+- `host/direct_test.py`: fixed direct USB beep diagnostic, sharing the normal
+  session's serial ownership and shutdown handling without a cloud connection.
 - Other `host/` modules: PiShock bridge, USB connection, and unit tests.
 - `app/`: external Flipper application manifest, USB interface, and RF encoder.
 - `tests/test_radio_core.c`: portable RF encoder and command parser tests.
@@ -43,8 +45,8 @@ Omit that argument to build just the portable application and ZIP.
 
 The release files appear in `dist/`:
 
-- `PiShockBridge-Setup-0.3.1.exe`: the end-user installer.
-- `PiShockBridge-0.3.1-windows-x64.zip`: portable application; extract the entire
+- `PiShockBridge-Setup-0.3.2.exe`: the end-user installer.
+- `PiShockBridge-0.3.2-windows-x64.zip`: portable application; extract the entire
   folder and open `PiShockBridge.exe`.
 - `SHA256SUMS.txt`: checksums for the downloadable packages.
 - `BUILD_INFO.json`: tool versions and build validation results.
@@ -79,7 +81,7 @@ first Tk window; this is needed by some Python distributions when frozen.
 For an additional local privacy check, run:
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.1-windows-x64
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.2-windows-x64
 ```
 
 The optional `--forbid-text` argument checks additional private values without

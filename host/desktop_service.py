@@ -54,7 +54,8 @@ class HubDiscovery:
 
 @dataclass(frozen=True)
 class BridgeEvent:
-    # starting, ready, refreshing, revalidating, status, warning, error, stopping, stopped
+    # starting, ready, direct_ready, direct_busy, refreshing, revalidating,
+    # status, warning, error, stopping, stopped
     kind: str
     message: str
 
@@ -204,6 +205,10 @@ class BridgeSession:
     It never arms, retries an operation, or reconnects by itself.
     """
 
+    starting_message = "Connecting to the Flipper and PiShock…"
+    failure_message = "The connection ended. Check the USB cable and internet, then reconnect. Press Back on the Flipper."
+    stopped_message = "Disconnected. The bridge will stay stopped until you choose Connect."
+
     def __init__(self):
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -226,7 +231,8 @@ class BridgeSession:
 
     def _post(self, kind: str, message: str) -> None:
         with self._lock:
-            if self._stop_requested.is_set() and kind in {"starting", "ready", "refreshing", "revalidating", "status"}:
+            if self._stop_requested.is_set() and kind in {"starting", "ready", "direct_ready", "direct_busy",
+                                                         "refreshing", "revalidating", "status"}:
                 return
             self._events.append(BridgeEvent(kind, message))
 
@@ -245,7 +251,7 @@ class BridgeSession:
             self._stop_requested.clear()
             self._events.clear()
             self._active = True
-            self._events.append(BridgeEvent("starting", "Connecting to the Flipper and PiShock…"))
+            self._events.append(BridgeEvent("starting", self.starting_message))
             try:
                 self._thread = threading.Thread(target=self._worker, args=(identity, port, beep_only),
                                                 name="PiShock bridge", daemon=False)
@@ -341,10 +347,10 @@ class BridgeSession:
         except DesktopError as error:
             self._post("error", str(error))
         except Exception:
-            self._post("error", "The connection ended. Check the USB cable and internet, then reconnect. Press Back on the Flipper.")
+            self._post("error", self.failure_message)
         finally:
             with self._lock:
                 self._loop = None
                 self._finished = None
                 self._active = False
-                self._events.append(BridgeEvent("stopped", "Disconnected. The bridge will stay stopped until you choose Connect."))
+                self._events.append(BridgeEvent("stopped", self.stopped_message))
