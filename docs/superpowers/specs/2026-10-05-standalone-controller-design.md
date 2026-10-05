@@ -2,7 +2,7 @@
 
 Date: 2026-10-05
 
-Status: The on-device controls and one-time desktop setup were approved in conversation. This written specification is ready for review; controller implementation has not started.
+Status: Written design approved on 2026-10-05. The user additionally confirmed that installation from the bridge must automatically assign the selected shocker's target. Controller implementation has not started.
 
 ## Purpose
 
@@ -27,7 +27,7 @@ There is no automatic keep-awake in this first controller release. PiShock websi
 
 ## Setup and privacy
 
-The desktop **Set up devices** page gains a controller installation action and a separate **Copy selected target to controller** action. These use the already selected saved profile; the user does not enter identifiers at a terminal. Both actions require the bridge/direct test to be stopped and Flipper applications to be closed.
+The desktop **Set up devices** page gains an **Install standalone controller** action that installs the matching application and automatically writes the selected shocker's ID and channel. A separate **Update controller target** action changes the target without reinstalling the app. These use the already selected saved profile; the user does not enter identifiers at a terminal. Both actions require the bridge/direct test to be stopped and Flipper applications to be closed. Installation reports completion only after both application and target have been read back and verified; a partial result explains which step must be repeated.
 
 The controller app is installed as `/ext/apps/Sub-GHz/pishock_controller.fap`. Its target is stored in `/ext/apps_data/pishock_controller/target.conf`, using a versioned FlipperFormat file with only:
 
