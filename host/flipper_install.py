@@ -131,6 +131,13 @@ def parse_device_info(response: bytes) -> DeviceInfo:
 def _asset_bytes(asset_dir: str | Path, api: tuple[int, int] = SUPPORTED_API) -> bytes:
     try:
         data = (Path(asset_dir) / ASSETS[api]).read_bytes()
+        return _validate_asset_bytes(data, api)
+    except (KeyError, OSError):
+        raise InstallError("The bundled Flipper application is missing or incompatible. Reinstall the desktop application.") from None
+
+
+def _validate_asset_bytes(data: bytes, api: tuple[int, int], expected_name: str | None = None) -> bytes:
+    try:
         if not 52 <= len(data) <= MAX_FILE_SIZE or data[:7] != b"\x7fELF\x01\x01\x01":
             raise ValueError
         if struct.unpack_from("<H", data, 18)[0] != 40:  # ARM
@@ -157,6 +164,13 @@ def _asset_bytes(asset_dir: str | Path, api: tuple[int, int] = SUPPORTED_API) ->
                 start, size = struct.unpack_from("<II", data, header + 16)
                 if size < 14 or start + size > len(data):
                     raise ValueError
+                if expected_name is not None:
+                    if size < 85:
+                        raise ValueError
+                    name_bytes = data[start + 20:start + 52]
+                    expected = expected_name.encode("ascii")
+                    if b"\0" not in name_bytes or name_bytes.split(b"\0", 1)[0] != expected:
+                        raise ValueError
                 manifests.append(struct.unpack_from("<IIIh", data, start))
         expected_api = (api[0] << 16) | api[1]
         if manifests != [(0x52474448, 1, expected_api, 7)]:
@@ -347,36 +361,53 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
     report = progress or (lambda percent, message: None)
     _check_cancel(cancel)
     console = _Console(port, serial_factory)
+    try:
+        report(0, "Checking Flipper firmware...")
+        device = console.identify()
+        _require_supported(device)
+        data = _asset_bytes(asset_dir, (device.api_major, device.api_minor))
+        digest = _verified_file(console, APP_PATH, data, progress=report, cancel=cancel,
+                                folders=("/ext/apps", "/ext/apps/Sub-GHz"))
+        return InstallResult(device, APP_PATH, digest)
+    finally:
+        console.close()
+
+
+def _require_supported(device: DeviceInfo) -> None:
+    if not device.supported:
+        supported = " and ".join(f"{major}.{minor}" for major, minor in ASSETS)
+        raise InstallError(
+            f"This Flipper uses API {device.api_major}.{device.api_minor} on hardware f{device.target}. "
+            f"Bundled application builds support API {supported} on hardware f7. "
+            "Keep your existing working app, or use a build matching your firmware. No firmware was changed.")
+
+
+def _verified_file(console: _Console, destination: str, data: bytes, *, progress=None,
+                   cancel=None, folders=()) -> str:
+    """Finish or restore a single bounded file once its final copying begins."""
+    if type(data) is not bytes or not 0 < len(data) <= MAX_FILE_SIZE:
+        raise InstallError("The installation file is invalid or too large.")
+    report = progress or (lambda percent, message: None)
     token = uuid.uuid4().hex
-    staging = f"{APP_PATH}.{token}.upload"
-    backup = f"{APP_PATH}.{token}.backup"
+    staging = f"{destination}.{token}.upload"
+    backup = f"{destination}.{token}.backup"
     staged = backup_created = commit_started = success = False
     previous: bytes | None = None
     try:
-        report(0, "Checking Flipper firmware…")
-        device = console.identify()
-        if not device.supported:
-            supported = " and ".join(f"{major}.{minor}" for major, minor in ASSETS)
-            raise InstallError(
-                f"This Flipper uses API {device.api_major}.{device.api_minor} on hardware f{device.target}. "
-                f"Bundled application builds support API {supported} on hardware f7. "
-                "Keep your existing working app, or use a build matching your firmware. "
-                "No firmware was changed.")
-        data = _asset_bytes(asset_dir, (device.api_major, device.api_minor))
         digest = hashlib.sha256(data).hexdigest()
         _check_cancel(cancel)
         console.require_idle()
-        for folder in ("/ext/apps", "/ext/apps/Sub-GHz"):
+        for folder in folders:
             console.mkdir(folder)
         # Refuse a (vanishingly unlikely) collision instead of appending to an
         # unrelated file. write_chunk always appends in official firmware.
         if console.exists(staging) or console.exists(backup):
             raise InstallError("A temporary installation name already exists. Please try again.")
-        if console.exists(APP_PATH):
-            previous = console.read_file(APP_PATH)
+        if console.exists(destination):
+            previous = console.read_file(destination)
             if hashlib.sha256(previous).hexdigest() == digest:
                 report(100, "Application already installed and verified. Open it on the Flipper.")
-                return InstallResult(device, APP_PATH, digest)
+                return digest
         for position in range(0, len(data), CHUNK_SIZE):
             _check_cancel(cancel)
             staged = True
@@ -389,20 +420,20 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
         _check_cancel(cancel)
         if previous is not None:
             backup_created = True
-            console.command(f'storage copy "{APP_PATH}" "{backup}"')
+            console.command(f'storage copy "{destination}" "{backup}"')
             if console.read_file(backup, len(previous)) != previous:
                 raise InstallError("Could not verify a backup of the installed app. Your installed app was kept.")
         _check_cancel(cancel)
         console.require_idle()
         report(85, "Finishing installation. Keep Flipper connected…")
         commit_started = True
-        console.command(f'storage rename "{staging}" "{APP_PATH}"')
+        console.command(f'storage rename "{staging}" "{destination}"')
         staged = False
-        if hashlib.sha256(console.read_file(APP_PATH, len(data))).hexdigest() != digest:
+        if hashlib.sha256(console.read_file(destination, len(data))).hexdigest() != digest:
             raise InstallError("The installed application did not pass verification.")
         success = True
         report(100, "Application installed and verified. Open PiShock USB Radio on the Flipper.")
-        return InstallResult(device, APP_PATH, digest)
+        return digest
     except InstallError as error:
         if commit_started:
             restored = False
@@ -410,9 +441,9 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
                 try:
                     # Official storage copy uses CREATE_NEW, so remove only
                     # our fixed destination before restoring the saved bytes.
-                    console.remove(APP_PATH)
-                    console.command(f'storage copy "{backup}" "{APP_PATH}"')
-                    restored = console.read_file(APP_PATH, len(previous)) == previous
+                    console.remove(destination)
+                    console.command(f'storage copy "{backup}" "{destination}"')
+                    restored = console.read_file(destination, len(previous)) == previous
                 except InstallError:
                     pass
             if restored:
@@ -429,4 +460,3 @@ def install_app(port: str, asset_dir: str | Path, *, progress: Callable[[int, st
                         console.remove(path)
                     except InstallError:
                         break
-        console.close()
