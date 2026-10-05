@@ -8,7 +8,7 @@ Set up devices with buttons, choose a paired shocker, and connect. The original 
 
 ## Get started
 
-Download **PiShockBridge-Setup-0.3.2.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
+Download **PiShockBridge-Setup-0.4.0.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
 
 1. In **Set up devices**, find the Flipper and choose **Install app**.
 2. Connect your original hub, choose **Find hub**, then **Read paired devices**.
@@ -18,7 +18,7 @@ Download **PiShockBridge-Setup-0.3.2.exe** from [Releases](https://github.com/ip
 
 Already using the original version? Keep your working Flipper app and choose **Use an existing CLI profile…** to import its encrypted profile.
 
-**Updating from 0.3 or 0.3.1?** Exit the desktop app from its tray menu and install 0.3.2. Your saved profile and existing 0.3 Flipper add-on can stay in place; this update requires no add-on reinstall or firmware change.
+**Updating from 0.3, 0.3.1, or 0.3.2?** Exit the desktop app from its tray menu and install 0.4.0. Your saved profile and existing 0.3 Flipper add-on can stay in place; the existing website bridge requires no USB Radio reinstall or firmware change. Install the separate controller only if you want offline use.
 
 **Updating from 0.2?** Exit the old desktop app, install this update, then use **Set up devices → Install app** to update the Flipper add-on too. Your saved profile is preserved. The new add-on is required for keep-awake and the simplified armed/disarmed controls.
 
@@ -36,6 +36,16 @@ The computer and original hub do not need matching Wi-Fi bands. The bridge uses 
 
 GitHub's source ZIP is source code, not the Windows installer. Contributors can follow [BUILD.md](docs/BUILD.md) to build the application.
 
+## Standalone Flipper controller
+
+Version 0.4.0 adds **PiShock Controller**, a separate SD-card add-on for offline use. After saving your selected shocker, stop the bridge or direct test, close apps on the Flipper, and choose **Set up devices → Install standalone controller**. The bridge automatically installs the matching app and assigns the selected saved shocker's ID and channel. No terminal or identifier entry is needed. To change targets later, save your new selection and choose **Update controller target** with the controller closed; no app reinstall is needed.
+
+Unplug USB and open **Apps → Sub-GHz → PiShock Controller**. It starts disarmed in Beep mode, at zero intensity and 0.5 seconds. Up/Down selects Mode, Intensity, or Duration; Left/Right changes the value. Hold OK to arm, release it, then press OK freshly to send one timed operation. Settings changes disarm. Back stops/disarms; hold Back to exit. See the [controller instructions](docs/USER_GUIDE.md#standalone-pishock-controller) for controls, pairing, and installation recovery.
+
+Offline operation needs no computer, internet, or original hub. PiShock website pause controls, permissions, and cloud settings do not apply to the controller, and it has no automatic keep-awake. The existing **PiShock USB Radio** app continues to handle website commands and the desktop direct beep test independently, with its own controls.
+
+Shared controller FAPs are generic. Only ID and channel are written to `/ext/apps_data/pishock_controller/target.conf` on your Flipper. This is readable SD-card configuration, not encrypted storage; do not share your real target file. Software verification does not establish physical receiver delivery; controller hardware validation remains pending until recorded separately.
+
 ## What it supports
 
 - Windows 10 or 11, 64-bit.
@@ -45,7 +55,7 @@ GitHub's source ZIP is source code, not the Windows installer. Contributors can 
 - Physical armed/disarmed controls, beep-only commissioning, and visible stop/disconnect controls. There is no separate Flipper intensity cap; the validated PiShock command settings and permissions apply.
 - Automatic zero-output radio keep-alives after a minute of inactivity while connected, including while disarmed. They defer during active output and can continue during planned cloud renewal. Disconnects, unexpected failures, observed cloud control changes, and changed policy disable them.
 
-This remains an experimental replacement for the hub's radio and device connection. It needs the computer for internet access. Radio delivery is not acknowledged by the shocker, and some legacy command formats and other hub features are outside its scope.
+This remains experimental community software. The website bridge needs the computer for internet access; the separate controller works offline. Radio delivery is not acknowledged by the shocker, and some legacy command formats and other hub features are outside its scope.
 
 The new desktop application lives on `main`. The original terminal-based version is preserved on `cli-original`.
 

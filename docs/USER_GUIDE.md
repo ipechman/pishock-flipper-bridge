@@ -1,12 +1,12 @@
 # PiShock Bridge user guide
 
-PiShock Bridge connects your existing PiShock website controls to a Flipper Zero over USB. The Flipper sends radio commands to your selected shocker. Keep the computer online and awake while using it.
+PiShock Bridge connects your existing PiShock website controls to a Flipper Zero over USB. The Flipper sends radio commands to your selected shocker. Keep the computer online and awake for website bridge use. Version 0.4.0 also includes a separate PiShock Controller add-on for offline operation from the Flipper after graphical setup.
 
 You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with an SD card and USB data cable, and a SmallOne shocker already paired to a PiShock Next or Lite hub in your own account. Keep the original hub available for the first setup and any later identity import.
 
 # Install the desktop application
 
-Download PiShockBridge-Setup-0.3.2.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
+Download PiShockBridge-Setup-0.4.0.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
 
 You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
 
@@ -14,9 +14,9 @@ Dark mode is the default. To change it, choose Dark or Light under Appearance in
 
 Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
 
-# Updating from version 0.3 or 0.3.1
+# Updating from version 0.3, 0.3.1, or 0.3.2
 
-Choose Exit from the desktop app's tray menu, then install version 0.3.2. Your saved profile is preserved. Keep the existing version 0.3 PiShock USB Radio add-on: this desktop update requires no add-on reinstall or Flipper firmware change. Version 0.3.2 adds a direct USB beep diagnostic under Troubleshoot.
+Choose Exit from the desktop app's tray menu, then install version 0.4.0. Your saved profile is preserved. Keep the existing version 0.3 PiShock USB Radio add-on: this desktop update requires no add-on reinstall or Flipper firmware change. Version 0.4.0 adds the separate standalone controller described below. Version 0.3.2 added a direct USB beep diagnostic under Troubleshoot.
 
 Version 0.3.1 fixes an immediate connection failure by completing PiShock registration before opening the cloud command connections. Registration can close connections that are already open. The [change notes](../CHANGELOG.md) document the fix and planned renewal behavior.
 
@@ -94,6 +94,45 @@ Hearing the beep confirms that the shocker received that test. The application c
 
 Use Back on the Flipper to disarm, or choose Stop & disconnect to end the desktop connection.
 
+# Standalone PiShock Controller
+
+PiShock Controller is a separate add-on for local operation without USB, a computer, internet, or the original hub after setup. It does not replace PiShock USB Radio, flash firmware, or require custom firmware. Both bundled controller builds target hardware f7: API 87.1 (official firmware 1.4.3) and API 88.9. Installation detects and selects the matching build.
+
+## Install and assign your saved target
+
+1. Import and save your selected shocker using Set up devices, or use your existing saved profile.
+2. Stop the bridge or direct test. Connect the Flipper by USB, close its running apps, and close qFlipper or other programs using USB.
+3. In Set up devices, choose Find Flipper and select it, then choose Install standalone controller.
+4. Keep USB connected until the app and target have both been copied, read back, and verified. Installation does not launch the controller or transmit.
+5. Disconnect USB and open Apps → Sub-GHz → PiShock Controller. Check the displayed target before arming.
+
+The selected saved shocker's ID and channel are assigned automatically. You do not need a terminal. To select a different shocker, save that selection in the bridge, close the controller, and choose Update controller target. This changes the target without reinstalling the app; reopen the controller to read it.
+
+The generic public application is stored at /ext/apps/Sub-GHz/pishock_controller.fap. The only personal controller settings are ID (1–65535) and channel (0–2), in /ext/apps_data/pishock_controller/target.conf. This readable SD-card file is not encrypted. It contains no full Windows profile, account credentials, Wi-Fi settings, or hub identity. Do not share a real target file.
+
+If installation reports a partial result, repeat the failed step before using the controller. A copied app with an unverified or stale target is not ready. Keep USB and power connected during copying; storage replacement is not guaranteed atomic. Closing the desktop waits for the current verified-file operation to finish or restore before exiting. Missing, invalid, oversized, duplicate-field, unsupported-version, or out-of-range target configuration prevents arming and shows a setup instruction. Use Update controller target to repair it.
+
+## Controller buttons and operation
+
+Every launch starts disarmed with Beep, intensity 0%, and duration 0.5 seconds. Mode, intensity, duration, and armed state are not saved.
+
+- Up/Down selects Mode, Intensity, or Duration. Left/Right changes the selected value; button repeat can adjust settings.
+- Modes are Beep, Vibration, and Shock. Beep always uses zero intensity. Vibration and Shock allow 0–100%; the protocol maps 100% to its supported maximum of 99.
+- Duration is 0.1–10.0 seconds, in 0.1-second steps.
+- Hold physical OK to arm, release it, then make a fresh physical OK press to send one timed operation. Holding OK to arm does not send an operation.
+- After completion, arming stays active. Changing a setting disarms; settings cannot change during transmission. Repeated or queued input cannot start repeated operations.
+- Back immediately stops transmission and disarms. Hold Back to exit after stopping. Relaunch always starts disarmed.
+
+The screen reports local transmission and completion, not receiver acknowledgment. There is no operation queue, automatic retry, remote arming, or automatic keep-awake. PiShock website pause controls, sharing permissions, and cloud settings do not govern offline controller use. USB Radio's website permissions and keep-awake continue to apply only to that separate bridge session.
+
+## Check reception and pairing with a beep
+
+Keep the powered receiver off-body, near the Flipper, and check the displayed target. Leave Beep selected at 0.5 seconds. Physically hold OK to arm, release, and press OK once. Listen for the receiver response; use Back to disarm afterward.
+
+If silent, check charge, range, target selection, and pairing. Importing the hub copies identity but does not pair the receiver. For a SmallOne pairing check, keep the original hub unplugged, prepare the controller in Beep mode and arm it, then put the receiver into its pairing window as described in the existing direct-beep troubleshooting section. Make one fresh OK press during that window, then test one beep in normal mode and disarm. The direct-beep pairing procedure was verified with USB Radio; standalone controller hardware pairing and delivery remain pending until separately tested.
+
+To check the add-on coexistence, exit the controller with long Back, reconnect USB, and open PiShock USB Radio for the existing desktop connection. USB Radio uses a single OK press to arm and website or desktop commands to send; the controller uses hold OK, release, then a fresh OK press to send locally.
+
 # Everyday use
 
 Open PiShock Bridge, open PiShock USB Radio on the USB-connected Flipper, and choose Find Flipper followed by Connect. Keep the original hub unplugged, the application open, and the computer awake.
@@ -114,7 +153,7 @@ An observed cloud control change, changed settings, or an unexpected failure sti
 
 There is a short gap between registration and subscribing to new cloud messages. Operations and configuration changes sent during that gap can be missed. Missed operations are discarded permanently, and the next settings refresh revalidates the current policy snapshot. The bridge cannot guarantee immediate observation of a configuration change during this gap.
 
-# Keep-awake
+# Website bridge keep-awake
 
 While the bridge is connected and ready, the Flipper sends a short zero-output radio packet after approximately 60 seconds of inactivity. It also works while disarmed. Active commands take priority, and activity restarts the inactivity timer.
 
@@ -132,7 +171,7 @@ Double-click the tray icon, or choose Open from its right-click menu, to restore
 
 If the tray icon cannot be created or becomes unavailable, the app keeps or restores its window so you can reach the controls. It does not start automatically with Windows.
 
-# Flipper controls
+# PiShock USB Radio controls
 
 OK while disarmed and connected: arm the application.
 

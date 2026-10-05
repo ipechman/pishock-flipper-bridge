@@ -15,6 +15,8 @@ to build the desktop application, run tests, or rebuild the Flipper add-on.
   session's serial ownership and shutdown handling without a cloud connection.
 - Other `host/` modules: PiShock bridge, USB connection, and unit tests.
 - `app/`: external Flipper application manifest, USB interface, and RF encoder.
+- `controller/`: standalone UI/HAL adapter and portable controller state model.
+- `tests/test_controller_core.c`: controller input, state, and target parsing tests.
 - `tests/test_radio_core.c`: portable RF encoder and command parser tests.
 - `packaging/`: Windows build, release privacy audit, and installer definition.
 - `CHANGELOG.md`: versioned changes and protocol limitations, included in desktop packages.
@@ -45,8 +47,8 @@ Omit that argument to build just the portable application and ZIP.
 
 The release files appear in `dist/`:
 
-- `PiShockBridge-Setup-0.3.2.exe`: the end-user installer.
-- `PiShockBridge-0.3.2-windows-x64.zip`: portable application; extract the entire
+- `PiShockBridge-Setup-0.4.0.exe`: the end-user installer.
+- `PiShockBridge-0.4.0-windows-x64.zip`: portable application; extract the entire
   folder and open `PiShockBridge.exe`.
 - `SHA256SUMS.txt`: checksums for the downloadable packages.
 - `BUILD_INFO.json`: tool versions and build validation results.
@@ -60,7 +62,7 @@ not contain a certificate, signing secret, or automatic publication step.
 ### What the release build checks
 
 The packager copies an explicit list of public runtime modules and resources to
-a fresh staging directory. It includes both supported API builds of the add-on, guide,
+a fresh staging directory. It includes both supported API builds of USB Radio and the standalone controller, guide,
 README, changelog, license, and notices. It excludes profiles, settings, logs, captures,
 tests, Git history, local tools, and compiler debug artifacts.
 
@@ -81,7 +83,7 @@ first Tk window; this is needed by some Python distributions when frozen.
 For an additional local privacy check, run:
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.2-windows-x64
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.4.0-windows-x64
 ```
 
 The optional `--forbid-text` argument checks additional private values without
@@ -93,7 +95,7 @@ those private values.
 From the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s host -p "test_*.py" -v
+.\.venv\Scripts\python.exe -B -W error -m unittest discover -s host -p "test_*.py" -v
 ```
 
 Tests use synthetic identities and mocked serial/network connections. They do
@@ -108,6 +110,8 @@ For the portable C tests, use a native C11 compiler such as GCC on Linux:
 mkdir -p build
 gcc -std=c11 -Wall -Wextra -Werror app/radio_core.c tests/test_radio_core.c -o build/test_radio_core
 ./build/test_radio_core
+gcc -std=c11 -Wall -Wextra -Werror controller/controller_core.c tests/test_controller_core.c -o build/test_controller_core
+./build/test_controller_core
 ```
 
 These tests check independent RF vectors, finite pulse timing, and strict parsing
@@ -215,6 +219,31 @@ Start this example from the repository root using the uFBT environment configure
 above. Verify API 88.9 and target f7 in the result, keep only the release FAP as
 `pishock_usb_radio-api-88.9.fap`, and update `SHA256SUMS` when changing either build.
 This downloads build tools only; it does not install any firmware on a Flipper.
+
+## Rebuild the standalone controller
+
+Use the public helper with a locally available f7 SDK and matching compiler toolchain. It stages the controller sources together with `app/radio_core.c` and `.h`, the canonical CaiXianlin encoder shared with USB Radio. Personal target configuration is never compiled into a FAP.
+
+```powershell
+.\.venv\Scripts\python.exe -B packaging/build_controller.py --sdk <SDKdir> --toolchain <toolchaindir> --work-dir <stagingdir> --output <fap>
+```
+
+Replace the placeholders with local SDK, toolchain, staging, and output paths. Build separately against API 87.1 (official firmware 1.4.3) and API 88.9; inspect each resulting FAP's embedded metadata and imports against its SDK before registering it as an asset. Keep staging and compiler debug artifacts local. The helper uses local build tools and does not contact a device, install firmware, or read a saved profile.
+
+Controller source, public asset manifest, and `SHA256SUMS` belong in the repository. After replacing a release FAP, update its manifest/checksum and rebuild the desktop package so its bundled bytes agree. Never put a real `target.conf`, `device.dpapi`, or decrypted profile in source, staging resources, or release packages. Installation writes only the selected ID/channel to readable SD configuration separately from the generic app.
+
+Portable controller tests cover arming and fresh physical presses, repeat/stale input rejection, stop priority, setting bounds, duration expiry, tick wrap, and strict target parsing. Final release validation must also include both SDK builds/import checks, the full Python suite with warnings treated as errors, both native C tests, and source/bundle privacy checks. Record actual build results and artifact hashes in release metadata; these instructions do not assert that a particular build passed.
+
+Physical validation is a separate user-driven check: verify installation and displayed target, unplug USB, physically arm and send one off-body beep, verify Back and relaunch disarm, then exit and verify USB Radio still opens. Do not automate shock or vibration during development. A local transmission status does not confirm reception.
+
+The initial 0.4.0 controller builds passed both SDK builds and import checks (49 enabled imports each), with ARM/f7 metadata and no USB CDC imports, debug sections, or builder paths. Each generic FAP is 10,140 bytes. Their published hashes are also recorded in `SHA256SUMS`:
+
+| Controller build | SHA-256 |
+|---|---|
+| API 87.1 / official 1.4.3 | `d9f9f2041da8b215b1477f17b85871b31be6a714cd7efb65a5abea7899a00c41` |
+| API 88.9 | `3d080a233127a6e81b39bd506702c7585d175812153ec3540f5994c34f9b2de3` |
+
+The 0.4.0 software checks passed 292 Python tests with warnings treated as errors and strict native C controller/encoder tests. A local adapter harness also exercised input, stop priority, finite transmission, storage bounds and cleanup with simulated hardware. These checks do not substitute for a physical controller test.
 
 ## GitHub Actions
 

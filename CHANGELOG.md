@@ -1,5 +1,14 @@
 # Change notes
 
+## 0.4.0 — 2026-10-05
+
+- Added PiShock Controller as a separate offline Flipper add-on, preserving PiShock USB Radio and the existing desktop bridge. Bundled builds target f7/API 87.1 (official firmware 1.4.3) and API 88.9; no custom firmware or firmware replacement is required.
+- Set up devices now offers Install standalone controller and Update controller target. Installation uses the selected saved shocker's ID/channel automatically, verifies application and target readback, and reports partial failures. Target changes do not require reinstalling the app.
+- The controller starts disarmed in Beep at zero intensity and 0.5 seconds. Physical hold OK arms; release followed by a fresh OK press starts one operation. Settings changes disarm, Back stops/disarms, and long Back exits. Duration is 0.1–10.0 seconds; Vibration and Shock allow 0–100%.
+- Public FAPs remain generic; only target ID/channel are stored in readable target.conf on the Flipper SD card. Complete profiles and real target files are excluded from public packages.
+- Offline use has no cloud permissions, automatic keep-awake, operation queue, remote arming, or automatic retry. Completion indicates local transmission, not receiver acknowledgment.
+- Controller physical installation, pairing, and receiver delivery require user-driven validation; software checks alone do not establish these results. Release verification is recorded separately.
+
 ## 0.3.2 — 2026-10-05
 
 - Added a Troubleshoot page with a direct USB beep test using the saved selected target. Each explicit click requests one 0.5-second beep; the diagnostic works without the PiShock website or internet.
@@ -8,7 +17,7 @@
 - Added receiver-pairing troubleshooting and clarified that USB acceptance/Transmitting does not confirm radio reception. Re-pairing restored direct and website beeps during physical troubleshooting of the prior release.
 - Existing saved profiles and the 0.3 Flipper add-on remain usable. No firmware change or add-on reinstall is needed for this desktop feature.
 
-The separate standalone controller's implementation plan is under review; its Flipper app is not included in this release.
+The standalone controller was not included in version 0.3.2; it is added in version 0.4.0.
 
 ## 0.3.1 — 2026-10-05
 
