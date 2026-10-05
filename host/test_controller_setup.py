@@ -143,4 +143,16 @@ class ControllerFailureTests(ControllerTests):
         removes=[c for c in fake.commands if c.startswith('storage remove')]
         self.assertFalse(any(other in c for c in removes))
 
+class ControllerAssetTests(unittest.TestCase):
+    def test_actual_controller_assets_match_api_and_published_checksums(self):
+        import hashlib
+        root = Path(__file__).resolve().parents[1]
+        checksums = {line.split()[1]: line.split()[0]
+                     for line in (root / 'SHA256SUMS').read_text().splitlines() if line.strip()}
+        for api, name in setup.CONTROLLER_ASSETS.items():
+            with self.subTest(api=api):
+                data = setup._asset_bytes(root, api)
+                self.assertGreater(len(data), 1024)
+                self.assertEqual(hashlib.sha256(data).hexdigest(), checksums[name])
+
 if __name__=='__main__': unittest.main()

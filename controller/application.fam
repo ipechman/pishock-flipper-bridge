@@ -1,0 +1,14 @@
+App(
+    appid="pishock_controller",
+    name="PiShock Controller",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="pishock_controller_app",
+    sources=["pishock_controller.c", "controller_core.c", "radio_core.c"],
+    requires=["gui"],
+    fap_libs=["subghz"],
+    stack_size=4096,
+    fap_category="Sub-GHz",
+    fap_version="0.4",
+    fap_description="Offline controller for SmallOne shockers",
+    fap_author="Community project; inspired by Droski1",
+)
