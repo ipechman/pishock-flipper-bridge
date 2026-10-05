@@ -15,6 +15,7 @@ to build the desktop application, run tests, or rebuild the Flipper add-on.
 - `app/`: external Flipper application manifest, USB interface, and RF encoder.
 - `tests/test_radio_core.c`: portable RF encoder and command parser tests.
 - `packaging/`: Windows build, release privacy audit, and installer definition.
+- `CHANGELOG.md`: versioned changes and protocol limitations, included in desktop packages.
 
 ## Build the Windows desktop release
 
@@ -42,8 +43,8 @@ Omit that argument to build just the portable application and ZIP.
 
 The release files appear in `dist/`:
 
-- `PiShockBridge-Setup-0.3.0.exe`: the end-user installer.
-- `PiShockBridge-0.3.0-windows-x64.zip`: portable application; extract the entire
+- `PiShockBridge-Setup-0.3.1.exe`: the end-user installer.
+- `PiShockBridge-0.3.1-windows-x64.zip`: portable application; extract the entire
   folder and open `PiShockBridge.exe`.
 - `SHA256SUMS.txt`: checksums for the downloadable packages.
 - `BUILD_INFO.json`: tool versions and build validation results.
@@ -58,7 +59,7 @@ not contain a certificate, signing secret, or automatic publication step.
 
 The packager copies an explicit list of public runtime modules and resources to
 a fresh staging directory. It includes both supported API builds of the add-on, guide,
-README, license, and notices. It excludes profiles, settings, logs, captures,
+README, changelog, license, and notices. It excludes profiles, settings, logs, captures,
 tests, Git history, local tools, and compiler debug artifacts.
 
 PyInstaller 6.21.0 anonymizes source filenames in its collected Python bytecode.
@@ -78,7 +79,7 @@ first Tk window; this is needed by some Python distributions when frozen.
 For an additional local privacy check, run:
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.0-windows-x64
+.\.venv\Scripts\python.exe -B packaging/audit_bundle.py dist/PiShockBridge-0.3.1-windows-x64
 ```
 
 The optional `--forbid-text` argument checks additional private values without
@@ -125,6 +126,42 @@ time. Physical arming gates operations independently. A pre-0.3 `ERR INVALID`
 response produces an upgrade hint; other errors and missing acknowledgments end
 the connection through normal cleanup. The `RADIO1` handshake remains compatible
 with older host tools.
+
+## Version 0.3.1 connection lifecycle
+
+Registration can close already-authenticated Redis streams. Initial startup
+therefore completes HTTPS registration and validates the returned policy before
+opening the command streams. Planned renewal closes the previous streams before
+registering again and establishing a fresh session. It does not retry an
+unexpected transport failure. Routine renewal is typically every 30 seconds;
+observed control messages also require policy revalidation.
+
+The host and backend operation gates close during renewal, and pending operations
+are discarded. A latch records accepted `RUN`/`REPLACE` operations since the last
+acknowledged `STOP`/`DISARM`. If set, routine renewal sends one `STOP`, including
+when the finite operation may already have ended. Only an acknowledged stop or
+disarm clears the latch. An unchanged routine policy preserves the existing
+physical armed/disarmed state; renewal cannot arm a disarmed Flipper.
+
+Idle renewal sends neither `STOP` nor `AWAKE`, preserving the add-on's maintenance
+timer. Enabled zero-output maintenance and USB heartbeats can continue through
+planned renewal. The single conservative stop following an operation may delay
+the next maintenance packet by roughly one refresh interval once. Observed
+controls, changed policy, and unexpected failures still disarm and disable
+maintenance. No firmware or add-on changes are required for an existing 0.3 add-on.
+
+Registration before subscription leaves a disconnected interval in which cloud
+operations and control messages can be missed. Missed operations are never
+replayed. The next registration refresh revalidates the policy snapshot; there is
+no guarantee of immediate observation of a control change during that interval.
+
+Regression checks should cover registration that closes existing streams,
+readiness only after fresh subscriptions, bootstrap controls, queued-command
+discard, unexpected EOF remaining fatal, cancellation, and unchanged versus
+changed policy. Host checks should also cover the accepted-operation latch and
+multiple idle renewals across the 60-second keep-awake deadline. Software checks
+alone do not establish live connectivity or receiver delivery. Record release
+validation separately from these lifecycle notes.
 
 ## Rebuild the Flipper add-on
 

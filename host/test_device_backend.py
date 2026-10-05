@@ -22,31 +22,54 @@ class Connection:
         self.closed = False
         self.count = 0
         self.failure = None
+        self.responses = asyncio.Queue()
+        self.before_ack = {}
+        self.hook = None
+        self.reading = False
 
     async def authenticate(self, credential):
+        if self.hook:
+            await self.hook("authenticate")
         self.authentications.append(credential)
         if self.failure:
             raise self.failure
 
     async def execute(self, *arguments):
+        if self.hook:
+            await self.hook(arguments[0])
         self.commands.append(arguments)
         if self.failure:
             raise self.failure
         if arguments[0] in ("PSUBSCRIBE", "SUBSCRIBE"):
             self.count += 1
-            return [arguments[0].lower().encode(), arguments[1], self.count]
+            ack = [arguments[0].lower().encode(), arguments[1], self.count]
+            frames = self.before_ack.get(arguments[1], [])
+            if frames:
+                for frame in frames[1:] + [ack]:
+                    self.responses.put_nowait(frame)
+                return frames[0]
+            return ack
         if arguments[0] in ("HSET", "PUBLISH"):
             return 1
         raise AssertionError("Unexpected network command")
 
     async def read_pubsub(self, *, idle=False):
         assert idle is True
-        event = await self.events.get()
-        if isinstance(event, Exception):
-            raise event
-        return event
+        self.reading = True
+        try:
+            event = await self.events.get()
+            if isinstance(event, Exception):
+                raise event
+            return event
+        finally:
+            self.reading = False
+
+    async def read_response(self):
+        return await self.responses.get()
 
     async def aclose(self):
+        if self.hook:
+            await self.hook("close")
         self.closed = True
 
     def incoming(self, suffix=b"ops", payload=b"data", *, own_mac=False):
@@ -75,8 +98,15 @@ class Harness:
         self.fetch_calls = 0
         self.stop = asyncio.Event()
         self.fetcher = self.default_fetch
+        self.refreshes = 0
+        self.registration_disconnects = 0
+        self.factory_hook = None
 
     async def factory(self):
+        if self.factory_hook:
+            await self.factory_hook()
+        if self.created == len(self.connections):
+            self.connections.extend([Connection(), Connection(publisher=True)])
         connection = self.connections[self.created]
         self.created += 1
         return connection
@@ -85,9 +115,17 @@ class Harness:
         self.fetch_calls += 1
         assert credential == MAC.decode()
         assert public_ip == IDENTITY.public_ip
-        assert self.sub.commands == [("PSUBSCRIBE", MAC + b"-*"),
-                                     ("PSUBSCRIBE", b"c123-*"), ("SUBSCRIBE", b"pingall")]
+        # The service invalidates already authenticated Redis sessions when
+        # registering. This side effect is essential to the regression.
+        for connection in self.connections[:self.created]:
+            if connection.authentications and not connection.closed:
+                self.registration_disconnects += 1
+                connection.failure = RespError()
+                connection.events.put_nowait(RespError())
         return {"generation": self.fetch_calls}
+
+    async def refreshing(self):
+        self.refreshes += 1
 
     def invalidated(self):
         self.invalidations += 1
@@ -96,7 +134,8 @@ class Harness:
         self.ready += 1
 
     def start(self, **options):
-        defaults = dict(heartbeat_seconds=3600, refresh_seconds=3600, lease_seconds=3600)
+        defaults = dict(heartbeat_seconds=3600, refresh_seconds=3600, lease_seconds=3600,
+                        on_refresh=self.refreshing)
         defaults.update(options)
         return asyncio.create_task(backend.run_backend(
             IDENTITY, self.snapshots.append, lambda *event: self.messages.append(event),
@@ -110,13 +149,16 @@ class Harness:
 
 
 class BackendTests(unittest.IsolatedAsyncioTestCase):
-    async def test_owned_subscriptions_precede_registration_and_only_liveness_is_published(self):
+    async def test_registration_precedes_authentication_and_only_liveness_is_published(self):
         harness = Harness()
         task = harness.start()
-        await eventually(lambda: harness.ready == 1 and len(harness.pub.commands) == 2)
+        await eventually(lambda: task.done() or harness.ready == 1 and len(harness.pub.commands) == 2)
         self.assertEqual(harness.created, 2)
+        self.assertEqual(harness.registration_disconnects, 0)
         self.assertEqual(harness.sub.authentications, [MAC.decode()])
         self.assertEqual(harness.pub.authentications, [MAC.decode()])
+        self.assertEqual(harness.sub.commands, [("PSUBSCRIBE", MAC + b"-*"),
+                         ("PSUBSCRIBE", b"c123-*"), ("SUBSCRIBE", b"pingall")])
         self.assertEqual(harness.pub.commands,
                          [("HSET", "lite:status", "123", "1700000000"),
                           ("PUBLISH", "123-ping", "1700000000")])
@@ -147,60 +189,145 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         harness.sub.incoming(b"ops", b"before-refresh-start")
         await asyncio.wait_for(refresh_started.wait(), 1)
         self.assertEqual(harness.invalidations, 2)  # startup + actual control
+        self.assertEqual(harness.refreshes, 1)
+        self.assertTrue(harness.sub.closed and harness.pub.closed)
         harness.sub.incoming(b"sops-example", b"during-refresh")
         await asyncio.sleep(0.01)
         self.assertEqual(harness.messages, [])
         release.set()
         await eventually(lambda: harness.ready == 2)
         self.assertEqual(harness.messages, [])
-        harness.sub.incoming(b"ops", b"fresh")
+        harness.connections[2].incoming(b"ops", b"fresh")
         await eventually(lambda: len(harness.messages) == 1)
         self.assertEqual(harness.messages[0][1], b"fresh")
         await harness.finish(task)
 
-    async def test_new_control_during_fetch_discards_stale_snapshot(self):
+    async def test_control_interleaved_with_bootstrap_ack_discards_session(self):
         harness = Harness()
-        second_started, release = asyncio.Event(), asyncio.Event()
+        harness.sub.before_ack[b"pingall"] = [
+            [b"pmessage", b"c123-*", b"c123-pause", b"private"],
+            [b"pmessage", b"c123-*", b"c123-ops", b"stale"],
+        ]
+        task = harness.start()
+        await eventually(lambda: harness.ready == 1)
+        self.assertEqual(harness.fetch_calls, 2)
+        self.assertEqual(harness.created, 4)
+        self.assertTrue(harness.sub.closed and harness.pub.closed)
+        self.assertEqual(harness.messages, [])
+        self.assertEqual(harness.invalidations, 2)
+        self.assertEqual(harness.refreshes, 1)
+        await harness.finish(task)
+
+    async def test_periodic_refresh_pauses_and_replaces_streams_before_registration(self):
+        harness = Harness()
+        blocked, release = asyncio.Event(), asyncio.Event()
 
         async def fetching(credential, public_ip):
             result = await harness.default_fetch(credential, public_ip)
             if harness.fetch_calls == 2:
-                second_started.set()
+                blocked.set()
                 await release.wait()
             return result
 
         harness.fetcher = fetching
-        task = harness.start()
-        await eventually(lambda: harness.ready == 1)
-        harness.sub.incoming(b"pause")
-        await second_started.wait()
-        harness.sub.incoming(b"rems")
-        await eventually(lambda: harness.invalidations == 3)
+        task = harness.start(refresh_seconds=0.02)
+        await asyncio.wait_for(blocked.wait(), 1)
+        self.assertEqual(harness.invalidations, 1)
+        self.assertEqual(harness.refreshes, 1)
+        self.assertTrue(harness.sub.closed and harness.pub.closed)
+        stop_payload = b'{"id":234,"m":"e","i":0,"d":0}'
+        harness.sub.incoming(payload=stop_payload)
         release.set()
         await eventually(lambda: harness.ready == 2)
-        self.assertEqual(harness.snapshots, [{"generation": 1}, {"generation": 3}])
+        self.assertEqual(harness.messages, [])
+        harness.connections[2].incoming(payload=b"fresh")
+        await eventually(lambda: len(harness.messages) == 1)
+        self.assertEqual(harness.messages[0][1], b"fresh")
+        self.assertEqual(harness.registration_disconnects, 0)
+        self.assertEqual(harness.invalidations, 1)
         await harness.finish(task)
 
-    async def test_periodic_refresh_keeps_stop_delivery_without_physical_invalidation(self):
+    async def test_refresh_waits_for_host_pause_and_monitors_unexpected_eof(self):
         harness = Harness()
-        blocked = asyncio.Event()
+        pausing, release = asyncio.Event(), asyncio.Event()
+
+        async def pause():
+            pausing.set()
+            await release.wait()
+
+        task = harness.start(on_refresh=pause, refresh_seconds=0.02)
+        await asyncio.wait_for(pausing.wait(), 1)
+        self.assertEqual(harness.fetch_calls, 1)
+        self.assertFalse(harness.sub.closed or harness.pub.closed)
+        harness.sub.incoming(payload=b"during-pause")
+        harness.sub.events.put_nowait(RespError())
+        release.set()
+        await asyncio.wait_for(task, 1)
+        self.assertEqual(harness.failures, ["protocol"])
+        self.assertEqual(harness.fetch_calls, 1)
+        self.assertEqual(harness.ready, 1)
+        self.assertEqual(harness.messages, [])
+        self.assertTrue(harness.sub.closed and harness.pub.closed)
+
+    async def test_bootstrap_control_pause_still_monitors_stream_failure(self):
+        harness = Harness()
+        pausing, release = asyncio.Event(), asyncio.Event()
+        harness.sub.before_ack[b"pingall"] = [[b"pmessage", b"c123-*", b"c123-pause", b"private"]]
+
+        async def pause():
+            pausing.set()
+            await release.wait()
+
+        task = harness.start(on_refresh=pause)
+        await asyncio.wait_for(pausing.wait(), 1)
+        harness.sub.events.put_nowait(RespError())
+        release.set()
+        await eventually(lambda: task.done() or harness.ready > 0)
+        self.assertEqual(harness.failures, ["protocol"])
+        self.assertEqual(harness.ready, 0)
+        self.assertEqual(harness.fetch_calls, 1)
+
+    async def test_expired_lease_cannot_reopen_gate_after_refresh(self):
+        harness = Harness()
+        now = [100.0]
 
         async def fetching(credential, public_ip):
             result = await harness.default_fetch(credential, public_ip)
-            if harness.fetch_calls > 1:
-                blocked.set()
-                await asyncio.Event().wait()
+            if harness.fetch_calls == 2:
+                now[0] = 200.0
             return result
 
         harness.fetcher = fetching
-        task = harness.start(refresh_seconds=0.02)
-        await blocked.wait()
-        self.assertEqual(harness.invalidations, 1)
-        stop_payload = b'{"id":234,"m":"e","i":0,"d":0}'
-        harness.sub.incoming(payload=stop_payload)
+        task = harness.start(refresh_seconds=0.01, lease_seconds=59, monotonic=lambda: now[0])
+        await eventually(lambda: task.done() or harness.ready > 1)
+        self.assertEqual(harness.ready, 1)
+        await asyncio.wait_for(task, 1)
+        self.assertEqual(harness.failures, ["protocol"])
+
+    async def test_both_authentications_precede_subscriptions_and_startup_ops_drop(self):
+        harness = Harness()
+
+        async def require_publisher_auth(phase):
+            if phase in ("SUBSCRIBE", "PSUBSCRIBE"):
+                if harness.pub.authentications != [MAC.decode()]:
+                    raise RespError()
+
+        harness.sub.hook = require_publisher_auth
+        for target in (MAC + b"-*", b"c123-*", b"pingall"):
+            harness.sub.before_ack[target] = [[b"pmessage", b"c123-*", b"c123-ops", b"old"]]
+        task = harness.start()
+        await eventually(lambda: harness.ready == 1 or task.done())
+        self.assertEqual(harness.ready, 1)
+        self.assertEqual(harness.messages, [])
+        harness.sub.incoming(payload=b"fresh")
         await eventually(lambda: len(harness.messages) == 1)
-        self.assertEqual(harness.messages[0][:2], (b"c123-ops", stop_payload))
-        self.assertEqual(harness.invalidations, 1)
+        await harness.finish(task)
+
+    async def test_refresh_without_callback_uses_compatible_invalidation(self):
+        harness = Harness()
+        task = harness.start(on_refresh=None, refresh_seconds=0.02)
+        await eventually(lambda: harness.ready == 2)
+        self.assertEqual(harness.invalidations, 2)
         await harness.finish(task)
 
     async def test_alive_requests_coalesce_and_pingall_only_renews_lease(self):
@@ -225,13 +352,21 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.failures, ["protocol"])
         self.assertTrue(harness.sub.closed and harness.pub.closed)
 
-    async def test_auth_denial_does_not_create_publisher_fetch_or_retry(self):
+    async def test_refresh_does_not_reset_missing_pingall_lease(self):
+        harness = Harness()
+        task = harness.start(refresh_seconds=0.01, lease_seconds=0.07)
+        await asyncio.wait_for(task, 1)
+        self.assertGreaterEqual(harness.ready, 3)
+        self.assertEqual(harness.failures, ["protocol"])
+        self.assertTrue(all(connection.closed for connection in harness.connections[:harness.created]))
+
+    async def test_auth_denial_does_not_create_publisher_or_retry(self):
         harness = Harness()
         harness.sub.failure = RespError("authentication")
         task = harness.start()
         await task
         self.assertEqual(harness.created, 1)
-        self.assertEqual(harness.fetch_calls, 0)
+        self.assertEqual(harness.fetch_calls, 1)
         self.assertEqual(harness.sub.authentications, [MAC.decode()])
         self.assertEqual(harness.failures, ["authentication"])
 
@@ -259,6 +394,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             connection_factory=harness.factory, fetch_snapshot=harness.default_fetch))
         await asyncio.wait_for(task, 1)
         self.assertEqual(harness.ready, 0)
+        self.assertEqual(harness.created, 0)
         self.assertEqual(harness.failures, ["protocol"])
 
     async def test_cancellation_closes_both_connections_and_invalidates(self):
@@ -270,6 +406,86 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertTrue(harness.sub.closed and harness.pub.closed)
         self.assertGreaterEqual(harness.invalidations, 2)
+
+    async def test_finish_and_cancel_during_each_startup_phase_close_owned_streams(self):
+        for phase in ("fetch", "connect-sub", "auth-sub", "connect-pub", "auth-pub", "subscribe"):
+            for cancel in (False, True):
+                with self.subTest(phase=phase, cancel=cancel):
+                    harness = Harness()
+                    entered = asyncio.Event()
+
+                    async def block():
+                        entered.set()
+                        await asyncio.Event().wait()
+
+                    async def fetching(credential, public_ip):
+                        if phase == "fetch":
+                            await block()
+                        return await harness.default_fetch(credential, public_ip)
+
+                    async def connecting():
+                        if (phase == "connect-sub" and harness.created == 0 or
+                                phase == "connect-pub" and harness.created == 1):
+                            await block()
+
+                    async def subscriber_hook(operation):
+                        if (phase == "auth-sub" and operation == "authenticate" or
+                                phase == "subscribe" and operation == "PSUBSCRIBE"):
+                            await block()
+
+                    async def publisher_hook(operation):
+                        if phase == "auth-pub" and operation == "authenticate":
+                            await block()
+
+                    harness.fetcher = fetching
+                    harness.factory_hook = connecting
+                    harness.sub.hook = subscriber_hook
+                    harness.pub.hook = publisher_hook
+                    task = harness.start()
+                    await asyncio.wait_for(entered.wait(), 1)
+                    if cancel:
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await asyncio.wait_for(task, 1)
+                    else:
+                        await harness.finish(task)
+                    self.assertEqual(harness.ready, 0)
+                    self.assertEqual(harness.failures, [])
+                    self.assertTrue(all(connection.closed for connection in harness.connections[:harness.created]))
+
+    async def test_finish_and_cancel_during_refresh_pause_or_fetch_close_streams(self):
+        for phase in ("pause", "fetch"):
+            for cancel in (False, True):
+                with self.subTest(phase=phase, cancel=cancel):
+                    harness = Harness()
+                    entered = asyncio.Event()
+
+                    async def block():
+                        entered.set()
+                        await asyncio.Event().wait()
+
+                    async def pausing():
+                        if phase == "pause":
+                            await block()
+
+                    async def fetching(credential, public_ip):
+                        result = await harness.default_fetch(credential, public_ip)
+                        if phase == "fetch" and harness.fetch_calls == 2:
+                            await block()
+                        return result
+
+                    harness.fetcher = fetching
+                    task = harness.start(on_refresh=pausing, refresh_seconds=0.01)
+                    await asyncio.wait_for(entered.wait(), 1)
+                    if cancel:
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await asyncio.wait_for(task, 1)
+                    else:
+                        await harness.finish(task)
+                    self.assertEqual(harness.ready, 1)
+                    self.assertEqual(harness.failures, [])
+                    self.assertTrue(all(connection.closed for connection in harness.connections[:harness.created]))
 
 
 class HttpTests(unittest.TestCase):

@@ -6,13 +6,19 @@ You need a Windows 10 or 11 computer running 64-bit Windows, a Flipper Zero with
 
 # Install the desktop application
 
-Download PiShockBridge-Setup-0.3.0.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
+Download PiShockBridge-Setup-0.3.1.exe from the project's GitHub Releases page when the Windows release is available. Run the installer and follow its steps, then open PiShock Bridge from the Start menu. A desktop shortcut is optional. Installing an update preserves your saved device profile.
 
 You do not need Python or a terminal. GitHub's source ZIP contains development files and is not the installer.
 
 Dark mode is the default. To change it, choose Dark or Light under Appearance in the sidebar. Your choice is saved separately from the device profile and restored when you next open the app.
 
 Opening the desktop app does not connect to PiShock or operate a shocker. Start with the shocker powered on and off-body for the connection check.
+
+# Updating from version 0.3
+
+Choose Exit from the desktop app's tray menu, then install version 0.3.1. Your saved profile is preserved. Keep the existing version 0.3 PiShock USB Radio add-on: this desktop update requires no add-on reinstall or Flipper firmware change.
+
+Version 0.3.1 fixes an immediate connection failure by completing PiShock registration before opening the cloud command connections. Registration can close connections that are already open. The [change notes](../CHANGELOG.md) document the fix and planned renewal behavior.
 
 # Updating from version 0.2
 
@@ -68,6 +74,8 @@ If a device is already saved, the app asks before replacing its desktop profile.
 
 The original hub must be online because its reported public address is part of the imported identity. The app keeps this imported address; it does not discover a changed public address automatically.
 
+The computer and original hub do not need to use the same Wi-Fi band. Each needs internet access when it is being used. During normal bridge use, the Flipper connects to the computer by USB and the computer connects to PiShock over the internet; the original hub stays unplugged.
+
 # Make your first connection
 
 1. Leave the original hub unplugged.
@@ -76,7 +84,7 @@ The original hub must be online because its reported public address is part of t
 4. Choose Find Flipper and select the Flipper radio app.
 5. Leave Beep-only test selected. This mode ignores shock and vibration commands.
 6. Check the displayed hub and shocker, then choose Connect.
-7. Wait for Connected · arm on Flipper.
+7. Wait for Connected · check Flipper.
 8. Press OK on the Flipper to arm it.
 9. With the shocker still powered on and off-body, send one short beep from PiShock's website using your existing hub controls.
 
@@ -96,13 +104,25 @@ Once connected, check the selected target on the Flipper, then press OK to arm. 
 
 The desktop app prevents another desktop instance in the same Windows session. Close any original CLI bridge or other program using the Flipper before connecting.
 
+# Routine PiShock renewal
+
+The bridge renews its cloud connection and checks its current settings, typically every 30 seconds. During this planned renewal it pauses operation forwarding and discards any pending command. If a website operation has been accepted by the Flipper since the last confirmed Stop or Disarm, the bridge sends one Stop before resuming. This also covers an operation that may have finished already. Pending or missed commands are never replayed; use a fresh website command after readiness returns.
+
+If the settings are unchanged, renewal preserves the Flipper's existing armed or disarmed state. It cannot arm a disarmed Flipper. USB heartbeats and enabled zero-output keep-awake continue during the brief cloud renewal.
+
+An observed cloud control change, changed settings, or an unexpected failure still stops and disarms the Flipper and disables keep-awake. Wait for readiness and physically re-arm after a settings change. An unexpected connection failure ends the session and requires you to connect again.
+
+There is a short gap between registration and subscribing to new cloud messages. Operations and configuration changes sent during that gap can be missed. Missed operations are discarded permanently, and the next settings refresh revalidates the current policy snapshot. The bridge cannot guarantee immediate observation of a configuration change during this gap.
+
 # Keep-awake
 
 While the bridge is connected and ready, the Flipper sends a short zero-output radio packet after approximately 60 seconds of inactivity. It also works while disarmed. Active commands take priority, and activity restarts the inactivity timer.
 
 The packet is the protocol's zero-intensity vibration/stop signal, with no beep or requested stimulation. Although sometimes described as a “0 ms command,” it needs a brief transmission because this radio protocol has no duration field.
 
-Keep-awake stops when you disconnect, exit, lose USB/heartbeat, or the PiShock connection is invalidated. It resumes when the bridge becomes ready again. The computer must remain awake, the shocker powered on, and the shocker in radio range; there is no receiver acknowledgment confirming delivery.
+Idle routine renewals send neither Stop nor another keep-awake enable command, so the inactivity timer continues. After a real operation, the single conservative Stop at the next renewal can delay the next keep-awake by roughly one refresh interval once. Later idle renewals do not keep postponing it.
+
+Keep-awake stops when you disconnect, exit, lose USB/heartbeat, encounter an unexpected cloud failure, or the bridge observes a control change or changed settings. It resumes when the bridge becomes ready again. It can remain enabled during planned cloud renewal. The computer must remain awake, the shocker powered on, and the shocker in radio range; there is no receiver acknowledgment confirming delivery.
 
 # Keep the bridge in the system tray
 
@@ -132,7 +152,7 @@ Stop & disconnect requests Stop and Disarm, disables keep-awake, closes the brid
 
 If the application says that Stop could not be confirmed over USB, press Back on the Flipper directly.
 
-USB loss, loss of the computer heartbeat, or a failed backend connection causes stopping and disarming. Fix the cable, internet connection, or sleep state, then connect again. Press OK on the Flipper and send a fresh command. The bridge does not automatically reconnect or replay commands.
+USB loss, loss of the computer heartbeat, or an unexpected failed backend connection causes stopping and disarming. Fix the cable, internet connection, or sleep state, then connect again. Press OK on the Flipper and send a fresh command. The bridge does not automatically retry an unexpected connection failure or replay commands.
 
 A pause, sharing-permission change, or other configuration update can make the desktop app show Refreshing permissions…. Wait for readiness and physically re-arm on the Flipper. Network commands cannot arm the app.
 
@@ -176,6 +196,12 @@ BUSY means a nonrepeating command arrived while another operation was active. Th
 
 Bring the original hub online on the new network and repeat the hub import. Confirm replacement of the desktop profile, then unplug the original hub before connecting again. The bridge retains the public address saved during import.
 
+## Connect immediately reports that the connection ended
+
+Update the desktop application to version 0.3.1. It fixes the registration order that could immediately close a newly opened PiShock connection, even after a successful hub import. An existing version 0.3 Flipper add-on does not need reinstalling for this fix.
+
+The connection-ended message can also indicate a USB or internet failure. If it persists after updating, check that PiShock USB Radio is open, other USB programs are closed, the computer is online, and the original hub is unplugged. A successful website command through the original hub does not by itself verify the computer's bridge connection.
+
 ## A saved profile cannot be opened
 
 Use the Windows account that saved it. A profile is encrypted for that account and should not be treated as a portable credential. On a different computer or account, import from your own original hub again.
@@ -204,4 +230,4 @@ Droski1's [PiShock-Unofficial-Documentation](https://github.com/Droski1/PiShock-
 
 OpenShock provided the CaiXianlin encoder and protocol references. Flipper Devices provides the application SDK and USB storage protocol.
 
-This is independent community software. The project source includes [NOTICE.md](../NOTICE.md) and [LICENSE](../LICENSE), with contributor instructions in [BUILD.md](BUILD.md). The desktop application is on main; the original terminal version is preserved on cli-original.
+This is independent community software. The project source includes [NOTICE.md](../NOTICE.md), [LICENSE](../LICENSE), and [change notes](../CHANGELOG.md), with contributor instructions in [BUILD.md](BUILD.md). The desktop application is on main; the original terminal version is preserved on cli-original.

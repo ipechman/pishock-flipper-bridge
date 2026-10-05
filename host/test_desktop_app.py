@@ -241,6 +241,16 @@ class DesktopAppTests(unittest.TestCase):
         self.assertNotIn("is disarmed", self.app.detail_text.get())
         self.assertNotIn("is armed", self.app.detail_text.get())
 
+    def test_planned_refresh_is_visible_and_preserves_user_arm_choice(self):
+        self.app._event(event('ready', 'Connected'))
+        self.app._event(event('refreshing', 'Renewing the connection'))
+        self.assertIn('Renewing', self.app.status_text.get())
+        self.assertIn('unchanged', self.app.detail_text.get())
+        self.assertIsNone(self.app.last_problem)
+        self.app._event(event('ready', 'Connected'))
+        self.assertTrue(self.app.status_text.get().startswith('Connected'))
+        self.assertIn('disarmed', self.app.detail_text.get())
+
     def test_hub_selection_change_discards_stale_discovery_and_target(self):
         self.fill_discovery()
         self.assertEqual(self.app.shocker_combo.current(), 0)
@@ -360,7 +370,7 @@ class DesktopAppTests(unittest.TestCase):
         self.run_step(self.app.refresh_radio)
         self.app.connect()
         self.until(lambda: self.app.status_text.get().startswith("Connected"))
-        self.assertIn("arm on Flipper", self.app.status_text.get())
+        self.assertIn("Flipper", self.app.status_text.get())
         self.assertIn("Beep-only test is on", self.app.detail_text.get())
         self.app.stop()
         self.until(lambda: self.app.status_text.get() == "Not connected")

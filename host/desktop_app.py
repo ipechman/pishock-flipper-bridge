@@ -19,7 +19,7 @@ from desktop_paths import AlreadyRunningError, InstanceLock, preferences_path, p
 from desktop_theme import Appearance, load_preference, save_preference
 
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 INSPIRATION_URL = 'https://github.com/Droski1/PiShock-Unofficial-Documentation'
 
 
@@ -548,11 +548,14 @@ class BridgeApp(tk.Tk):
         if self.last_problem and self.last_problem[0] == 'warning' and kind in ('error', 'failure'):
             return  # Preserve the explicit physical-stop instruction through teardown.
         if kind == 'ready':
-            self.status_text.set('Connected · arm on Flipper')
-            self.detail_text.set('Press OK on the Flipper to arm, then use PiShock’s website. '
+            self.status_text.set('Connected · check Flipper')
+            self.detail_text.set('If the Flipper is disarmed, press OK to arm before using PiShock’s website. '
                                  + ('Beep-only test is on.' if self.beep_only.get() else 'Your accepted PiShock settings apply.'))
         elif kind in ('connecting', 'starting'):
             self.status_text.set('Connecting…')
+        elif kind == 'refreshing':
+            self.status_text.set('Renewing connection…')
+            self.detail_text.set('Commands are briefly paused. Arming stays unchanged unless PiShock settings change.')
         elif kind in ('revalidating', 'invalidated'):
             self.status_text.set('Refreshing permissions…')
             self.detail_text.set('Output is being stopped. Wait for the connection to be ready and re-arm on the Flipper.')

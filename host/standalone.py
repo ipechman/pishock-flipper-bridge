@@ -43,6 +43,7 @@ class Mailbox:
     pending: object = None
     pending_at: float = 0.0
     disarm: bool = False
+    pause_requested: bool = False
     ready_notice: bool = False
     rearm_on_ready: bool = True
     failure: str | None = None
@@ -53,6 +54,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
     """The event loop alone owns the Flipper serial client and latest command."""
     finished = finished if finished is not None else asyncio.Event()
     state = Mailbox()
+    pause_complete = asyncio.Event()
 
     def status(category):
         # A presentation callback must never interrupt radio cleanup.
@@ -83,14 +85,26 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
         state.snapshot = None
         state.pending = None
         state.disarm = True
+        state.ready_notice = False
         state.rearm_on_ready = True
         status('revalidating')
 
+    async def on_refresh():
+        # A routine registration replaces the cloud streams. Wait for the
+        # serial owner to stop any accepted output before opening that gap.
+        state.ready = False
+        state.pending = None
+        state.ready_notice = False
+        pause_complete.clear()
+        state.pause_requested = True
+        status('revalidating' if state.rearm_on_ready else 'refreshing')
+        await pause_complete.wait()
+
     def on_ready():
         state.ready = True
+        state.ready_notice = True
         if state.rearm_on_ready:
             state.disarm = True
-            state.ready_notice = True
             state.rearm_on_ready = False
 
     def on_failure(reason):
@@ -100,13 +114,16 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
 
     task = None
     configured = False
+    keepalive_configured = False
+    output_dirty = False
     try:
         client.hello()
         client.disarm()
         status('connecting')
         emit('Connecting directly to PiShock for your saved hub...', flush=True)
         task = asyncio.create_task(backend(identity, on_snapshot, on_message,
-                                         on_invalidated, on_ready, on_failure, finished))
+                                         on_invalidated, on_ready, on_failure, finished,
+                                         on_refresh=on_refresh))
         last_loop = clock()
         next_ping = last_loop
         session_start = last_loop
@@ -120,6 +137,17 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                 state.pending = None
                 client.stop()
                 client.disarm()
+                output_dirty = False
+                keepalive_configured = False
+            if state.pause_requested:
+                state.pause_requested = False
+                state.pending = None
+                if output_dirty:
+                    client.stop()
+                    output_dirty = False
+                # Idle refreshes send neither STOP nor AWAKE: either would
+                # reset the add-on's minute timer every 30 seconds forever.
+                pause_complete.set()
             if state.failure:
                 raise RadioError(state.failure)
             if task.done():
@@ -133,27 +161,27 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
             if configured and now >= next_ping:
                 client.ping()
                 next_ping = clock() + HEARTBEAT_SECONDS
-            if state.ready_notice and configured:
+            if state.ready and state.ready_notice and configured:
                 state.ready_notice = False
-                emit(f'Direct connection ready: hub {identity.hub_id}, shocker {identity.shocker_id}.', flush=True)
-                emit('Original hub is not needed. Press OK on the Flipper to arm; Back stops the Flipper.', flush=True)
-                if beep_only:
-                    emit('Beep-only test: shock and vibration are ignored.', flush=True)
                 status('ready')
-                # The add-on owns the minute timer and only transmits while idle.
-                # USB pings continue through backend refresh, so readiness must
-                # explicitly gate RF keep-alives. Every host DISARM clears this
-                # gate; unchanged refreshes must not restart its inactivity timer.
-                try:
-                    client.set_keepalive(True)
-                except RejectedCommand as error:
-                    if safe_rejection_reason(error) != 'INVALID':
-                        raise RadioError('Flipper keep-alive setup failed; reconnect the bridge.') from None
-                    # RADIO1 add-ons from before 0.3 reject this new command.
-                    # Preserve their existing operation support, with an upgrade hint.
-                    status('addon_update_required')
-                else:
-                    status('keepalive_enabled')
+                if not keepalive_configured:
+                    emit(f'Direct connection ready: hub {identity.hub_id}, shocker {identity.shocker_id}.', flush=True)
+                    emit('Original hub is not needed. Press OK on the Flipper to arm; Back stops the Flipper.', flush=True)
+                    if beep_only:
+                        emit('Beep-only test: shock and vibration are ignored.', flush=True)
+                    # Zero-output maintenance continues during planned cloud
+                    # renewal. A control change/failure still DISARMs, clearing
+                    # this gate; a routine renewal must not restart its timer.
+                    try:
+                        client.set_keepalive(True)
+                    except RejectedCommand as error:
+                        if safe_rejection_reason(error) != 'INVALID':
+                            raise RadioError('Flipper keep-alive setup failed; reconnect the bridge.') from None
+                        # Older RADIO1 add-ons preserve command support.
+                        status('addon_update_required')
+                    else:
+                        status('keepalive_enabled')
+                    keepalive_configured = True
             pending, state.pending = state.pending, None
             if pending is not None and configured and state.ready:
                 if clock() - state.pending_at > MAX_EVENT_AGE:
@@ -161,6 +189,7 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                 command = pending.command
                 if command.mode == 'stop':
                     client.stop()
+                    output_dirty = False
                     emit(f'[{clock() - session_start:.3f}s] Stop forwarded.', flush=True)
                 elif beep_only and command.mode != 'beep':
                     emit('Non-beep command ignored during this test.', flush=True)
@@ -178,9 +207,11 @@ async def run_standalone(identity, client, *, beep_only=False, backend=run_backe
                         # matching the stock transmitter's nonreplacement path.
                         if reason != 'BUSY':
                             client.stop()
+                            output_dirty = False
                         state.pending = None
                         emit(f'Command discarded: {reason}. It was not retried.', flush=True)
                     else:
+                        output_dirty = True
                         emit(f'[{clock() - session_start:.3f}s] Forwarded {command.mode}: '
                              f'{command.intensity}%, {command.duration_ms} ms.', flush=True)
             await asyncio.sleep(0.01)

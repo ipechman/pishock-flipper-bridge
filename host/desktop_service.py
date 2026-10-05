@@ -54,7 +54,7 @@ class HubDiscovery:
 
 @dataclass(frozen=True)
 class BridgeEvent:
-    # starting, ready, revalidating, status, warning, error, stopping, stopped
+    # starting, ready, refreshing, revalidating, status, warning, error, stopping, stopped
     kind: str
     message: str
 
@@ -226,7 +226,7 @@ class BridgeSession:
 
     def _post(self, kind: str, message: str) -> None:
         with self._lock:
-            if self._stop_requested.is_set() and kind in {"starting", "ready", "revalidating", "status"}:
+            if self._stop_requested.is_set() and kind in {"starting", "ready", "refreshing", "revalidating", "status"}:
                 return
             self._events.append(BridgeEvent(kind, message))
 
@@ -304,7 +304,8 @@ class BridgeSession:
         mapping = {
             "connecting": ("starting", "Connecting to PiShock…"),
             "revalidating": ("revalidating", "Checking updated PiShock settings. Output is being stopped."),
-            "ready": ("ready", "Connected. Press OK on the Flipper when you are ready to arm it."),
+            "refreshing": ("refreshing", "Renewing the PiShock connection. Commands are briefly paused."),
+            "ready": ("ready", "Connected. Check the Flipper's armed/disarmed state before using the website."),
             "keepalive_enabled": ("status", "Keep-awake enabled: idle zero-output radio packets keep the shocker ready."),
             "addon_update_required": ("status", "Install the 0.3 Flipper add-on from Set up devices to enable keep-awake and remove the old local limit."),
             "stopping": ("stopping", "Stopping and disarming the Flipper…"),

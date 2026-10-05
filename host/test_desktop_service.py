@@ -343,6 +343,7 @@ class SessionTests(unittest.TestCase):
             await finished.wait()
             on_status("ready")
             on_status("revalidating")
+            on_status("refreshing")
             on_status("stop_unconfirmed")
 
         with patch.object(service, "run_standalone", side_effect=runner):
@@ -356,6 +357,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(kinds.count("stopping"), 1)
         self.assertNotIn("ready", kinds)
         self.assertNotIn("revalidating", kinds)
+        self.assertNotIn("refreshing", kinds)
         self.assertIn("warning", kinds)
 
     def test_unknown_emit_and_exception_data_are_never_displayed(self):
@@ -378,7 +380,8 @@ class SessionTests(unittest.TestCase):
         entered = threading.Event()
         real_runner = service.run_standalone
 
-        async def backend(_identity, snapshot, _message, _invalidated, ready, _failure, finished):
+        async def backend(_identity, snapshot, _message, _invalidated, ready, _failure, finished,
+                          *, on_refresh=None):
             snapshot({"r": True, "t": "R", "cl": True, "c": 4100, "oid": 9000,
                       "s": [{"id": 1234, "t": 1, "p": False}], "p": {}})
             ready()
@@ -423,7 +426,8 @@ class SessionTests(unittest.TestCase):
             categories.append(category)
             raise RuntimeError(SECRETS)
 
-        async def backend(_identity, snapshot, _message, _invalidated, ready, _failure, finished):
+        async def backend(_identity, snapshot, _message, _invalidated, ready, _failure, finished,
+                          *, on_refresh=None):
             snapshot({"r": True, "t": "R", "cl": True, "c": 4100, "oid": 9000,
                       "s": [{"id": 1234, "t": 1, "p": False}], "p": {}})
             ready()

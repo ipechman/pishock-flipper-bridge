@@ -105,11 +105,12 @@ class StandaloneTests(unittest.IsolatedAsyncioTestCase):
         def emit(message, **_kwargs):
             logs.append(message)
 
-        async def backend(identity, snapshot, message, invalidated, ready, failure, done):
+        async def backend(identity, snapshot, message, invalidated, ready, failure, done,
+                          *, on_refresh=None):
             self.assertIs(identity, IDENTITY)
             callbacks = SimpleNamespace(snapshot=snapshot, message=message,
                                         invalidated=invalidated, ready=ready,
-                                        failure=failure, finished=done)
+                                        failure=failure, finished=done, refresh=on_refresh)
 
             async def connect():
                 invalidated()
@@ -134,6 +135,147 @@ class StandaloneTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.keepalive)
         self.assertEqual(client.calls[-2:], [("stop",), ("disarm",)])
         return client, logs
+
+    async def test_refresh_stops_accepted_output_and_discards_pending_before_returning(self):
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            client.press_ok()
+            cb.message(CHANNEL, command(), time.monotonic())
+            await until(lambda: client.active is not None)
+            before = client.count('stop'), client.count('disarm')
+            cb.message(CHANNEL, command(d=2000), time.monotonic())
+            self.assertIsNotNone(cb.refresh, 'Backend needs an acknowledged host pause')
+            await cb.refresh()
+            self.assertIsNone(client.active)
+            self.assertEqual((client.count('stop'), client.count('disarm')),
+                             (before[0] + 1, before[1]))
+            self.assertTrue(client.armed)
+            self.assertTrue(client.keepalive)
+            cb.message(CHANNEL, command(d=3000), time.monotonic())
+            cb.snapshot(registration())
+            cb.ready()
+            await asyncio.sleep(0.025)
+            self.assertEqual(len(client.attempts), 1)
+            self.assertEqual(client.count('keepalive'), 1)
+            self.assertTrue(client.armed)
+        await self.exercise(scenario)
+
+    async def test_idle_refreshes_preserve_minute_timer_and_stop_dirty_output_only_once(self):
+        class TimerRadio(FakeRadio):
+            # Mirror the device boundary: AWAKE, STOP and operations reset its
+            # inactivity timer; USB PING and cloud events do not.
+            now = 0
+            last_activity = 0
+
+            def set_keepalive(self, enabled):
+                super().set_keepalive(enabled)
+                self.last_activity = self.now
+
+            def stop(self):
+                super().stop()
+                self.last_activity = self.now
+
+            def _operate(self, name, value):
+                super()._operate(name, value)
+                self.last_activity = self.now
+
+            def maintenance_due(self):
+                return self.keepalive and self.now - self.last_activity >= 60
+
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            self.assertIsNotNone(cb.refresh, 'Backend needs an acknowledged host pause')
+            before = client.count('stop')
+            for moment in (30, 60):
+                client.now = moment
+                await cb.refresh()
+                cb.snapshot(registration())
+                cb.ready()
+                await asyncio.sleep(0.015)
+            self.assertTrue(client.maintenance_due())
+            self.assertFalse(client.armed)  # Routine ready never remotely arms.
+            self.assertEqual(client.count('stop'), before)
+            self.assertEqual(client.count('keepalive'), 1)
+            client.press_ok()
+            client.now = 65
+            cb.message(CHANNEL, command(m='b', i=0), time.monotonic())
+            await until(lambda: client.active is not None)
+            for moment in (90, 120, 150):
+                client.now = moment
+                await cb.refresh()
+                cb.snapshot(registration())
+                cb.ready()
+                await asyncio.sleep(0.015)
+            self.assertTrue(client.maintenance_due())
+            self.assertEqual(client.count('stop'), before + 1)
+            self.assertEqual(client.count('keepalive'), 1)
+        await self.exercise(scenario, client=TimerRadio())
+
+    async def test_busy_refusal_does_not_lose_required_refresh_stop(self):
+        async def scenario(cb, client, logs):
+            await cb.connect()
+            client.press_ok()
+            cb.message(CHANNEL, command(), time.monotonic())
+            await until(lambda: client.active is not None)
+            cb.message(CHANNEL, command(r=False), time.monotonic())
+            await until(lambda: any('Command discarded: BUSY' in line for line in logs))
+            self.assertIsNotNone(cb.refresh, 'Backend needs an acknowledged host pause')
+            before = client.count('stop')
+            await cb.refresh()
+            self.assertEqual(client.count('stop'), before + 1)
+            self.assertIsNone(client.active)
+            self.assertTrue(client.armed)
+        await self.exercise(scenario)
+
+    async def test_failed_refresh_stop_aborts_before_resuming(self):
+        class BrokenStopRadio(FakeRadio):
+            fail_stop = False
+
+            def stop(self):
+                super().stop()
+                if self.fail_stop:
+                    raise RadioError('STOP acknowledgment unavailable')
+
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            client.press_ok()
+            cb.message(CHANNEL, command(), time.monotonic())
+            await until(lambda: client.active is not None)
+            client.fail_stop = True
+            self.assertIsNotNone(cb.refresh, 'Backend needs an acknowledged host pause')
+            await cb.refresh()
+            self.fail('A failed STOP must not finish the refresh handshake')
+        await self.exercise(scenario, client=BrokenStopRadio(), error='STOP acknowledgment')
+
+    async def test_coalesced_ready_then_invalidation_never_enables_keepalive(self):
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            count = client.count('keepalive')
+            cb.invalidated()
+            cb.snapshot(registration())
+            cb.ready()
+            cb.invalidated()
+            await asyncio.sleep(0.025)
+            self.assertFalse(client.keepalive)
+            self.assertEqual(client.count('keepalive'), count)
+        await self.exercise(scenario)
+
+    async def test_control_refresh_keeps_rearm_status_until_ready(self):
+        statuses = []
+
+        async def scenario(cb, client, _logs):
+            await cb.connect()
+            client.press_ok()
+            cb.invalidated()
+            await cb.refresh()
+            self.assertFalse(client.armed)
+            self.assertFalse(client.keepalive)
+            self.assertEqual(statuses[-1], 'revalidating')
+            cb.snapshot(registration())
+            cb.ready()
+            await until(lambda: client.count('keepalive') == 2)
+            self.assertFalse(client.armed)
+        await self.exercise(scenario, on_status=statuses.append)
 
     async def test_keepalive_requires_backend_ready_and_unchanged_refresh_keeps_timer(self):
         async def scenario(cb, client, _logs):

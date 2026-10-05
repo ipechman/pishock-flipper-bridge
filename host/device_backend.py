@@ -1,6 +1,6 @@
 """Own-device PiShock backend actor. No serial, RF, or operation publishing.
 
-The caller supplies an already verified identity and synchronous callbacks. Raw
+The caller supplies an already verified identity and policy callbacks. Raw
 registration and operation data go only to those callbacks, never to logs.
 """
 
@@ -30,6 +30,10 @@ class BackendError(Exception):
     def __init__(self, category="protocol"):
         self.category = category if category in {"authentication", "permission", "server", "protocol"} else "protocol"
         super().__init__("Device backend stopped: " + self.category + ".")
+
+
+class _Finished(Exception):
+    """Internal exit when a synchronous callback finishes the backend."""
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -95,7 +99,7 @@ async def fetch_registration(credential: str, public_ip: str):
 class _Backend:
     def __init__(self, identity, on_snapshot, on_message, on_invalidated, on_ready, on_failure,
                  finished, connection_factory, fetch_snapshot, heartbeat_seconds, refresh_seconds,
-                 lease_seconds, monotonic, wall_clock):
+                 lease_seconds, monotonic, wall_clock, on_refresh):
         self.credential, self.hub_id, self.public_ip = _identity_fields(identity)
         self.hub_prefix = f"c{self.hub_id}-".encode("ascii")
         self.mac_prefix = (self.credential + "-").encode("ascii")
@@ -105,6 +109,7 @@ class _Backend:
         self.on_invalidated = on_invalidated
         self.on_ready = on_ready
         self.on_failure = on_failure
+        self.on_refresh = on_refresh
         self.finished = finished if finished is not None else asyncio.Event()
         self.connection_factory = connection_factory or RedisConnection.connect
         self.fetch_snapshot = fetch_snapshot or fetch_registration
@@ -119,9 +124,16 @@ class _Backend:
         self.subscriber = self.publisher = None
         self.ready = False
         self.generation = 0
-        self.last_pingall = monotonic()
+        self.last_pingall = None
         self.refresh_requested = asyncio.Event()
         self.heartbeat_requested = asyncio.Event()
+        self.session_tasks = []
+
+    def check_running(self) -> None:
+        if self.finished.is_set():
+            raise _Finished()
+        if self.last_pingall is not None and self.monotonic() - self.last_pingall >= self.lease_seconds:
+            raise BackendError()
 
     def invalidate(self, *, control: bool) -> None:
         self.ready = False
@@ -156,6 +168,7 @@ class _Backend:
         reply = await self.subscriber.execute(kind, target)
         deadline = self.monotonic() + 5.0
         while True:
+            self.check_running()
             event = parse_pubsub(reply)
             if isinstance(event, SubscriptionAck):
                 if event.kind != kind.lower() or event.channel != target:
@@ -173,26 +186,92 @@ class _Backend:
                 raise BackendError()
             self.process_message(event)
 
-    async def refresh_loop(self) -> None:
+    async def wait_for_refresh(self) -> None:
+        try:
+            await asyncio.wait_for(self.refresh_requested.wait(), self.refresh_seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    async def wait_with_session(self, operation) -> None:
+        """Keep live stream failures fatal while waiting for a refresh/pause."""
+        waiting = asyncio.create_task(operation)
+        try:
+            await asyncio.wait([waiting, *self.session_tasks], return_when=asyncio.FIRST_COMPLETED)
+            # A stream failure wins even when the requested pause also finished.
+            for task in self.session_tasks:
+                if task.done():
+                    await task
+                    raise BackendError()
+            await waiting
+        finally:
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
+
+    async def pause_for_refresh(self) -> None:
+        if self.on_refresh is None:
+            self.on_invalidated()
+        else:
+            await self.on_refresh()
+
+    async def close_session(self) -> None:
+        tasks = self.session_tasks
+        self.session_tasks = []
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Never overlap a new registration with an old stream or its I/O tasks.
+        error = next((result for result in results if isinstance(result, Exception)), None)
+        for attribute in ("subscriber", "publisher"):
+            connection = getattr(self, attribute)
+            if connection is not None:
+                try:
+                    await connection.aclose()
+                except Exception as close_error:
+                    error = error or close_error
+                setattr(self, attribute, None)
+        if error is not None:
+            raise error
+
+    async def session_loop(self) -> None:
         while True:
-            await self.refresh_requested.wait()
+            self.check_running()
             self.refresh_requested.clear()
             generation = self.generation
+            # Registration invalidates authenticated streams at the service.
+            # Validate its result before creating either replacement stream.
             snapshot = await self.fetch_snapshot(self.credential, self.public_ip)
-            if generation != self.generation:
-                continue
+            self.check_running()
             self.on_snapshot(snapshot)
-            # Callbacks are synchronous on this loop; validation must succeed
-            # before any operation can pass the gate.
-            self.ready = True
-            self.on_ready()
-
-    async def periodic_refresh_loop(self) -> None:
-        while True:
-            await asyncio.sleep(self.refresh_seconds)
-            # The last validated policy remains active during routine refresh,
-            # including STOP delivery. Actual control events invalidate it.
-            self.refresh_requested.set()
+            self.check_running()
+            self.subscriber = await self.connection_factory()
+            self.check_running()
+            await self.subscriber.authenticate(self.credential)
+            self.check_running()
+            self.publisher = await self.connection_factory()
+            self.check_running()
+            await self.publisher.authenticate(self.credential)
+            self.check_running()
+            for pattern in self.patterns:
+                await self.subscribe("PSUBSCRIBE", pattern)
+            await self.subscribe("SUBSCRIBE", b"pingall")
+            self.check_running()
+            if self.last_pingall is None:
+                self.last_pingall = self.monotonic()
+            self.session_tasks = [asyncio.create_task(self.read_loop()),
+                                  asyncio.create_task(self.heartbeat_loop())]
+            if generation == self.generation and not self.refresh_requested.is_set():
+                # No await between the last ACK and gate opening: messages
+                # buffered after the ACK are consumed by the ready reader.
+                self.ready = True
+                self.on_ready()
+                self.check_running()
+                await self.wait_with_session(self.wait_for_refresh())
+            # A control received among subscription ACKs invalidated this
+            # snapshot/session. It must be replaced without opening the gate.
+            self.ready = False
+            await self.wait_with_session(self.pause_for_refresh())
+            self.check_running()
+            await self.close_session()
 
     async def heartbeat_loop(self) -> None:
         while True:
@@ -213,8 +292,7 @@ class _Backend:
 
     async def lease_loop(self) -> None:
         while True:
-            if self.monotonic() - self.last_pingall >= self.lease_seconds:
-                raise BackendError()
+            self.check_running()
             await asyncio.sleep(min(1.0, self.lease_seconds / 4))
 
     async def run(self) -> None:
@@ -224,24 +302,15 @@ class _Backend:
             if self.finished.is_set():
                 return
             self.on_invalidated()
-            self.subscriber = await self.connection_factory()
-            await self.subscriber.authenticate(self.credential)
-            for pattern in self.patterns:
-                await self.subscribe("PSUBSCRIBE", pattern)
-            await self.subscribe("SUBSCRIBE", b"pingall")
-            self.last_pingall = self.monotonic()
-            self.publisher = await self.connection_factory()
-            await self.publisher.authenticate(self.credential)
-            # All own channels are subscribed before the first registration GET.
-            self.invalidate(control=False)
             tasks = [asyncio.create_task(coroutine) for coroutine in (
-                self.read_loop(), self.refresh_loop(), self.periodic_refresh_loop(),
-                self.heartbeat_loop(), self.lease_loop(), self.finished.wait())]
+                self.session_loop(), self.lease_loop(), self.finished.wait())]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 await task
             if not self.finished.is_set():
                 raise BackendError()
+        except _Finished:
+            pass
         except asyncio.CancelledError:
             raise
         except (BackendError, RespError) as error:
@@ -258,12 +327,12 @@ class _Backend:
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            for connection in (self.subscriber, self.publisher):
-                if connection is not None:
-                    try:
-                        await connection.aclose()
-                    except Exception:
-                        failure = "protocol"
+            try:
+                await self.close_session()
+            except (BackendError, RespError) as error:
+                failure = failure or error.category
+            except Exception:
+                failure = failure or "protocol"
             if failure is not None:
                 self.on_failure(failure)
 
@@ -271,16 +340,17 @@ class _Backend:
 async def run_backend(identity, on_snapshot, on_message, on_invalidated, on_ready, on_failure,
                       finished=None, *, connection_factory=None, fetch_snapshot=None,
                       heartbeat_seconds=15.0, refresh_seconds=30.0, lease_seconds=59.0,
-                      monotonic=time.monotonic, wall_clock=time.time) -> None:
+                      monotonic=time.monotonic, wall_clock=time.time, on_refresh=None) -> None:
     """Run until finished is set, cancellation, or the first fatal error.
 
-    Callbacks are synchronous and run on this event loop. on_snapshot receives a
+    Policy callbacks are synchronous on this event loop. on_snapshot receives a
     raw mapping and must validate policy or raise. on_message receives opaque
     channel/payload bytes plus local monotonic receive time only while ready.
     on_invalidated() immediately closes the caller's command gate for actual
-    control events and shutdown. Routine refresh keeps the last validated policy
-    and command flow active; on_snapshot must stop/disarm if policy changes.
-    on_failure gets only one
+    control events and shutdown. The optional async on_refresh() closes the
+    caller's gate and awaits any required STOP before old streams are retired
+    and registration is fetched. Without it, on_invalidated() is the fallback.
+    on_snapshot must stop/disarm if policy changes. on_failure gets only one
     safe authentication/permission/server/protocol category; failures never retry.
 
     Injected connection_factory is async with no arguments. fetch_snapshot is
@@ -288,5 +358,5 @@ async def run_backend(identity, on_snapshot, on_message, on_invalidated, on_read
     """
     backend = _Backend(identity, on_snapshot, on_message, on_invalidated, on_ready, on_failure,
                        finished, connection_factory, fetch_snapshot, heartbeat_seconds,
-                       refresh_seconds, lease_seconds, monotonic, wall_clock)
+                       refresh_seconds, lease_seconds, monotonic, wall_clock, on_refresh)
     await backend.run()

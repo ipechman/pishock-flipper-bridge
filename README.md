@@ -8,7 +8,7 @@ Set up devices with buttons, choose a paired shocker, and connect. The original 
 
 ## Get started
 
-Download **PiShockBridge-Setup-0.3.0.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
+Download **PiShockBridge-Setup-0.3.1.exe** from [Releases](https://github.com/ipechman/pishock-flipper-bridge/releases) when the Windows release is available. Install it, then open **PiShock Bridge** from the Start menu. Python and terminal commands are not needed.
 
 1. In **Set up devices**, find the Flipper and choose **Install app**.
 2. Connect your original hub, choose **Find hub**, then **Read paired devices**.
@@ -18,6 +18,8 @@ Download **PiShockBridge-Setup-0.3.0.exe** from [Releases](https://github.com/ip
 
 Already using the original version? Keep your working Flipper app and choose **Use an existing CLI profile…** to import its encrypted profile.
 
+**Updating from 0.3?** Exit the desktop app from its tray menu and install 0.3.1. Your saved profile and existing 0.3 Flipper add-on can stay in place; this update requires no add-on reinstall or firmware change.
+
 **Updating from 0.2?** Exit the old desktop app, install this update, then use **Set up devices → Install app** to update the Flipper add-on too. Your saved profile is preserved. The new add-on is required for keep-awake and the simplified armed/disarmed controls.
 
 The desktop app opens in dark mode by default. Choose **Dark** or **Light** under **Appearance** in the sidebar; your choice is remembered on this computer.
@@ -25,6 +27,10 @@ The desktop app opens in dark mode by default. Choose **Dark** or **Light** unde
 Closing the window keeps the bridge running in the **system tray near the clock**. Use the tray icon to reopen it, **Stop & disconnect**, or **Exit** completely.
 
 The [full user guide](docs/USER_GUIDE.md) covers setup, migration, everyday controls, and troubleshooting. It is also available in **Help & about** inside the app.
+
+Version 0.3.1 completes PiShock registration before opening the cloud command connections, fixing an immediate disconnect caused by registration closing existing connections. Planned renewal, typically every 30 seconds, briefly pauses command forwarding and discards pending commands. An unchanged policy preserves the Flipper's existing armed or disarmed state. See the [change notes](CHANGELOG.md) for renewal behavior and protocol limits.
+
+The computer and original hub do not need matching Wi-Fi bands. The bridge uses the computer's internet connection and USB to the Flipper; the original hub only needs to be online when importing its setup.
 
 GitHub's source ZIP is source code, not the Windows installer. Contributors can follow [BUILD.md](docs/BUILD.md) to build the application.
 
@@ -35,7 +41,7 @@ GitHub's source ZIP is source code, not the Windows installer. Contributors can 
 - Bundled Flipper add-ons support **API 87.1 (official firmware 1.4.3)** and **API 88.9**, both on hardware **f7**. The installer detects your API and selects the matching build before copying it. Custom firmware is not required, and installation does not change your firmware or format storage.
 - A compatible PiShock USB Radio app already installed can continue to be used. Skip installation if it is already working. Other APIs need a matching application build; the installer does not override an incompatibility.
 - Physical armed/disarmed controls, beep-only commissioning, and visible stop/disconnect controls. There is no separate Flipper intensity cap; the validated PiShock command settings and permissions apply.
-- Automatic zero-output radio keep-alives after a minute of inactivity while connected, including while disarmed. They defer during active output and stop when the bridge disconnects or its connection is being revalidated.
+- Automatic zero-output radio keep-alives after a minute of inactivity while connected, including while disarmed. They defer during active output and can continue during planned cloud renewal. Disconnects, unexpected failures, observed cloud control changes, and changed policy disable them.
 
 This remains an experimental replacement for the hub's radio and device connection. It needs the computer for internet access. Radio delivery is not acknowledged by the shocker, and some legacy command formats and other hub features are outside its scope.
 
